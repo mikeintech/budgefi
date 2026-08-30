@@ -1,0 +1,7 @@
+import * as Radio from '@radix-ui/react-radio-group'
+import * as React from 'react'
+import { cn } from '@/lib/utils'
+export const RadioGroup=Radio.Root
+export const RadioGroupItem=React.forwardRef<React.ElementRef<typeof Radio.Item>,React.ComponentPropsWithoutRef<typeof Radio.Item>>(({className,...props},ref)=><Radio.Item ref={ref} className={cn('grid size-6 shrink-0 place-items-center rounded-full border-2 border-carbon bg-sheet transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pencil data-[state=checked]:border-pencil',className)} {...props}><Radio.Indicator className="size-3 rounded-full bg-pencil"/></Radio.Item>)
+RadioGroupItem.displayName='RadioGroupItem'
+export function RadioChoice({value,title,description,selected}:{value:string,title:string,description:string,selected?:boolean}){return <label className={cn('flex min-h-[68px] cursor-pointer items-start gap-3 rounded-xl border bg-sheet p-3 transition-colors',selected?'border-pencil bg-pencil/[.035] shadow-[inset_3px_0_0_#3155c6]':'border-rule hover:border-carbon/35')}><Radio.Item value={value} className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-full border-2 border-carbon focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pencil"><Radio.Indicator className="size-3 rounded-full bg-pencil"/></Radio.Item><span><span className="block font-semibold">{title}</span><span className="mt-0.5 block text-[13px] leading-snug text-carbon/65">{description}</span></span></label>}

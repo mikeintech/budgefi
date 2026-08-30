@@ -1,0 +1,10 @@
+import * as Dialog from '@radix-ui/react-dialog'
+import * as React from 'react'
+import { X } from 'lucide-react'
+import { cn } from '@/lib/utils'
+
+export const Sheet=Dialog.Root; export const SheetTrigger=Dialog.Trigger; export const SheetClose=Dialog.Close
+export function SheetContent({children,className,title,description}:{children:React.ReactNode,className?:string,title?:string,description?:string,side?:'bottom'}) { return <Dialog.Portal><Dialog.Overlay className="fixed inset-0 z-50 bg-carbon/35 backdrop-blur-[1px] data-[state=open]:animate-[fade_.16s_ease-out]"/><Dialog.Content className={cn('fixed inset-x-0 bottom-0 z-50 mx-auto max-h-[92dvh] w-full max-w-[430px] overflow-y-auto rounded-t-[22px] border border-rule bg-sheet px-5 pb-[calc(24px+env(safe-area-inset-bottom))] pt-4 shadow-2xl focus:outline-none data-[state=open]:animate-[sheet-up_.22s_ease-out]',className)}><div className="mx-auto mb-4 h-1 w-11 rounded-full bg-rule"/>{title&&<div className="mb-5 pr-10"><Dialog.Title className="text-xl font-bold">{title}</Dialog.Title>{description&&<Dialog.Description className="mt-1 text-sm text-carbon/65">{description}</Dialog.Description>}</div>}<Dialog.Close className="absolute right-4 top-5 grid size-11 place-items-center rounded-full text-carbon/60 hover:bg-recessed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pencil"><X className="size-5"/><span className="sr-only">Close</span></Dialog.Close>{children}</Dialog.Content></Dialog.Portal> }
+export const SheetHeader=({className,...props}:React.HTMLAttributes<HTMLDivElement>)=><div className={cn('mb-5 pr-10',className)} {...props}/>
+export const SheetTitle=React.forwardRef<React.ElementRef<typeof Dialog.Title>,React.ComponentPropsWithoutRef<typeof Dialog.Title>>(({className,...props},ref)=><Dialog.Title ref={ref} className={cn('text-xl font-bold',className)} {...props}/>)
+export const SheetDescription=React.forwardRef<React.ElementRef<typeof Dialog.Description>,React.ComponentPropsWithoutRef<typeof Dialog.Description>>(({className,...props},ref)=><Dialog.Description ref={ref} className={cn('mt-1 text-sm text-carbon/65',className)} {...props}/>)

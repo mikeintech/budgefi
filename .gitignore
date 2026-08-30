@@ -1,0 +1,11 @@
+node_modules/
+dist/
+work/
+outputs/
+design/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+public/assets/editorial/cell-*.png
+public/assets/editorial/*-green.png
+.DS_Store
