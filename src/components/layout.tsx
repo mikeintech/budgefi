@@ -246,7 +246,13 @@ function TopBar({ detail }: { detail: boolean }) {
           <ChevronLeft className="size-6" />
         </button>
       ) : (
-        <Wordmark compact />
+        <Link
+          to="/today"
+          aria-label="Go to Today"
+          className="flex min-h-11 min-w-11 items-center rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pencil"
+        >
+          <Wordmark compact />
+        </Link>
       )}
       {isNativeApp && detail && (
         <h1 className="pointer-events-none absolute inset-x-16 truncate text-center text-[17px] font-semibold">
