@@ -202,7 +202,7 @@ export function ManualEntryPage() {
                 value={actualDate}
                 max={localToday()}
                 onChange={(event) => setActualDate(event.target.value)}
-                className="mt-2 h-12 w-full rounded-xl border border-rule bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-pencil"
+                className="mt-2 h-12 w-full rounded-xl border border-rule bg-white px-3 text-base font-bold outline-none focus:ring-2 focus:ring-pencil"
               />
             </label>
           </div>
@@ -285,7 +285,7 @@ export function ManualEntryPage() {
                   setCommitmentDate(event.target.value);
                   setSaved(null);
                 }}
-                className="mt-2 h-12 w-full rounded-xl border border-rule bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-pencil"
+                className="mt-2 h-12 w-full rounded-xl border border-rule bg-white px-3 text-base font-bold outline-none focus:ring-2 focus:ring-pencil"
               />
             </label>
           </div>
