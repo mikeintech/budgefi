@@ -287,6 +287,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const mutationQueue = useRef<Promise<void>>(Promise.resolve());
   const confirmedBootstrapRef = useRef<BootstrapResponse | null>(null);
   const plaidPollGeneration = useRef(0);
+  const reloadGeneration = useRef(0);
+  const scheduledReload = useRef<number | null>(null);
   const initialProjection = calculatePlanProjection(defaultCalibration, 0);
   const [authoritativeProjection, setAuthoritativeProjection] =
     useState<AuthoritativeProjection>({
@@ -478,7 +480,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setBackendStatus(confirmedBootstrapRef.current ? "cached" : "unavailable");
   };
 
-  const loadCachedBootstrap = async (): Promise<boolean> => {
+  const loadCachedBootstrap = async (generation?: number): Promise<boolean> => {
     if (!isNativeApp) return false;
     try {
       const scope = await authCacheScope();
@@ -494,6 +496,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       if (parsed.scope !== scope) return false;
       const bootstrap = bootstrapResponseSchema.parse(parsed.bootstrap);
       if (parsed.householdId !== bootstrap.household.id) return false;
+      if (generation !== undefined && generation !== reloadGeneration.current)
+        return false;
       setLastConfirmedAt(
         typeof parsed.confirmedAt === "string"
           ? parsed.confirmedAt
@@ -507,16 +511,21 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   };
 
   const reloadBackend = async () => {
+    const generation = ++reloadGeneration.current;
     if (!confirmedBootstrapRef.current) setBackendStatus("loading");
     try {
       const [bootstrap, flags] = await Promise.all([
         api.bootstrap(),
         api.features().catch(() => defaultFeatureFlags),
       ]);
+      if (generation !== reloadGeneration.current) return;
       setFeatures(flags);
       applyBootstrap(bootstrap, "network");
     } catch (error) {
-      if (!(await loadCachedBootstrap())) reportError(error);
+      if (generation !== reloadGeneration.current) return;
+      if (!(await loadCachedBootstrap(generation))) {
+        if (generation === reloadGeneration.current) reportError(error);
+      }
     }
   };
 
@@ -597,6 +606,16 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     void reloadBackend();
+    const queueReload = () => {
+      if (scheduledReload.current !== null)
+        window.clearTimeout(scheduledReload.current);
+      // Native resume and document visibility commonly arrive together. One
+      // refresh is enough and avoids racing two copies of the same snapshot.
+      scheduledReload.current = window.setTimeout(() => {
+        scheduledReload.current = null;
+        void reloadBackend();
+      }, 150);
+    };
     const reconnect = (event: Event) => {
       const detail = (event as CustomEvent<{ connected?: boolean }>).detail;
       if (detail?.connected === false) {
@@ -608,18 +627,21 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         }
         return;
       }
-      void reloadBackend();
+      queueReload();
     };
     const refreshWhenVisible = () => {
-      if (document.visibilityState === "visible") void reloadBackend();
+      if (document.visibilityState === "visible") queueReload();
     };
     window.addEventListener("budgefi:network", reconnect);
-    window.addEventListener("budgefi:resume", reloadBackend);
+    window.addEventListener("budgefi:resume", queueReload);
     document.addEventListener("visibilitychange", refreshWhenVisible);
     return () => {
       plaidPollGeneration.current += 1;
+      reloadGeneration.current += 1;
+      if (scheduledReload.current !== null)
+        window.clearTimeout(scheduledReload.current);
       window.removeEventListener("budgefi:network", reconnect);
-      window.removeEventListener("budgefi:resume", reloadBackend);
+      window.removeEventListener("budgefi:resume", queueReload);
       document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
   }, []);

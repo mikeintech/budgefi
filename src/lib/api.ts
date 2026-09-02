@@ -159,15 +159,20 @@ async function requestParsed<T>(
   const timeout = window.setTimeout(() => controller.abort(), 30_000);
   let response: Response;
   try {
-    response = await fetch(`${baseUrl}${path}`, {
-      ...init,
-      signal: controller.signal,
-      headers: {
-        Accept: "application/json",
-        ...(await authorizationHeader()),
-        ...(init.headers ?? {}),
-      },
-    });
+    const send = async (forceRefresh = false) =>
+      fetch(`${baseUrl}${path}`, {
+        ...init,
+        signal: controller.signal,
+        headers: {
+          Accept: "application/json",
+          ...(await authorizationHeader({ forceRefresh })),
+          ...(init.headers ?? {}),
+        },
+      });
+    response = await send();
+    // Mobile browsers can preserve an expired token while the app is asleep.
+    // Give Clerk one explicit refresh before treating the session as invalid.
+    if (response.status === 401) response = await send(true);
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError")
       throw new ApiError(

@@ -55,7 +55,7 @@ function AuthTokenBridge({ children }: { children: React.ReactNode }) {
     () => isNativeApp && nativeCleanupRequired(),
   );
   const [cleanupFailed, setCleanupFailed] = useState(false);
-  const currentSessionId = isSignedIn ? sessionId ?? null : null;
+  const currentSessionId = isSignedIn ? (sessionId ?? null) : null;
   // Refs contain the session that was allowed to render previously. Detecting
   // the change during render prevents session B's Effects from starting before
   // the layout effect below has queued cleanup for session A.
@@ -143,7 +143,12 @@ function AuthTokenBridge({ children }: { children: React.ReactNode }) {
           lastToken.current = token;
       });
     setAccessTokenProvider(
-      currentSessionId ? async () => (await getToken()) ?? "" : null,
+      currentSessionId
+        ? async (options) =>
+            (await getToken(
+              options?.forceRefresh ? { skipCache: true } : undefined,
+            )) ?? ""
+        : null,
     );
     setSignOutProvider(async () => {
       if (isNativeApp) markNativeCleanupRequired();
