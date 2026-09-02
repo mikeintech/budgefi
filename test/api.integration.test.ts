@@ -14,6 +14,7 @@ import { PlaidService } from "../apps/api/src/plaid/plaid.service.js";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
 if (!testDatabaseUrl) throw new Error("TEST_DATABASE_URL is required; PostgreSQL integration tests must never be skipped");
+const testRuntimePassword = "integration-api-runtime-password-000000000004";
 const ids = {
   userA: "10000000-0000-4000-8000-000000000001",
   userB: "10000000-0000-4000-8000-000000000002",
@@ -48,7 +49,7 @@ describe("Budgefi API with PostgreSQL", () => {
     await admin.connect();
     await admin.query("DROP ROLE IF EXISTS budgefi_runtime_test");
     await admin.query("DROP ROLE IF EXISTS budgefi_function_owner_test");
-    await admin.query("CREATE ROLE budgefi_runtime_test LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS IN ROLE budgefi_app, budgefi_plaid_worker");
+    await admin.query(`CREATE ROLE budgefi_runtime_test LOGIN PASSWORD '${testRuntimePassword}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS IN ROLE budgefi_app, budgefi_plaid_worker`);
     await admin.query("CREATE ROLE budgefi_function_owner_test NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS");
     await admin.query("GRANT USAGE ON SCHEMA public TO budgefi_function_owner_test");
     await admin.query("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO budgefi_function_owner_test");
@@ -59,7 +60,7 @@ describe("Budgefi API with PostgreSQL", () => {
     await admin.query("GRANT EXECUTE ON FUNCTION resolve_system_household_actor(uuid) TO budgefi_plaid_worker");
     const runtimeUrl = new URL(testDatabaseUrl);
     runtimeUrl.username = "budgefi_runtime_test";
-    runtimeUrl.password = "";
+    runtimeUrl.password = testRuntimePassword;
     process.env.RUNTIME_DATABASE_URL = runtimeUrl.toString();
     await resetFixture(admin);
     const [{ AppModule }, { ErrorFilter }, { PlaidGateway }] = await Promise.all([import("../apps/api/src/app.module.js"), import("../apps/api/src/http/error.filter.js"), import("../apps/api/src/plaid/plaid.gateway.js")]);
