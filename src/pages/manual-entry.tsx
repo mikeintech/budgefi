@@ -185,6 +185,7 @@ export function ManualEntryPage() {
               id="manual-actual-amount"
               label="Amount"
               value={actualAmount}
+              className=""
               onChange={(value) => {
                 setActualAmount(value);
                 setSaved(null);
@@ -265,6 +266,7 @@ export function ManualEntryPage() {
               id="manual-commitment-amount"
               label="Expected amount"
               value={commitmentAmount}
+              className=""
               onChange={(value) => {
                 setCommitmentAmount(value);
                 setSaved(null);
@@ -419,14 +421,16 @@ function MoneyField({
   label,
   value,
   onChange,
+  className = "mt-3",
 }: {
   id: string;
   label: string;
   value: number;
   onChange: (value: number) => void;
+  className?: string;
 }) {
   return (
-    <label className="mt-3 block text-xs font-semibold" htmlFor={id}>
+    <label className={`${className} block text-xs font-semibold`} htmlFor={id}>
       {label}
       <span className="mt-2 flex h-12 items-center rounded-xl border border-rule bg-white px-3 focus-within:ring-2 focus-within:ring-pencil">
         <span className="text-muted">$</span>
