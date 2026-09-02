@@ -177,7 +177,7 @@ type State = {
   backendStatus: BackendStatus;
   backendError: string | null;
   lastConfirmedAt: string | null;
-  reloadBackend: () => void;
+  reloadBackend: () => Promise<void>;
   setHouseholdMode: (v: HouseholdMode) => void;
   setNotificationMode: (v: NotificationMode) => void;
   setWeeklyDigest: (v: boolean) => void;
@@ -502,14 +502,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const reloadBackend = () => {
+  const reloadBackend = async () => {
     if (!confirmedBootstrapRef.current) setBackendStatus("loading");
-    void api
-      .bootstrap()
-      .then((bootstrap) => applyBootstrap(bootstrap, "network"))
-      .catch(async (error) => {
-        if (!(await loadCachedBootstrap())) reportError(error);
-      });
+    try {
+      applyBootstrap(await api.bootstrap(), "network");
+    } catch (error) {
+      if (!(await loadCachedBootstrap())) reportError(error);
+    }
   };
 
   const mutate = (
@@ -550,7 +549,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   const pollPlaidUntilSettled = async (): Promise<void> => {
     const generation = ++plaidPollGeneration.current;
-    const deadline = Date.now() + 45_000;
+    // The scheduled worker can begin near the end of its two-minute cadence.
+    // Keep the UI reconciled through that full window instead of stranding a
+    // successful Link session behind an obsolete "Fix" warning.
+    const deadline = Date.now() + 180_000;
     let delay = 1_500;
     while (generation === plaidPollGeneration.current && Date.now() < deadline) {
       await new Promise((resolve) => window.setTimeout(resolve, delay));
@@ -562,11 +564,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           ["pending", "syncing", "revocation_pending"].includes(connection.status),
         );
         if (!unsettled) return;
-        delay = Math.min(Math.round(delay * 1.6), 6_000);
+        delay = Math.min(Math.round(delay * 1.6), 10_000);
       } catch {
         // The normal offline/retry surface owns errors. A provider poll is
         // deliberately quiet so a transient refresh cannot erase good data.
-        delay = Math.min(Math.round(delay * 1.6), 6_000);
+        delay = Math.min(Math.round(delay * 1.6), 10_000);
       }
     }
   };
@@ -580,7 +582,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => {
-    reloadBackend();
+    void reloadBackend();
     const reconnect = (event: Event) => {
       const detail = (event as CustomEvent<{ connected?: boolean }>).detail;
       if (detail?.connected === false) {
@@ -592,16 +594,33 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         }
         return;
       }
-      reloadBackend();
+      void reloadBackend();
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void reloadBackend();
     };
     window.addEventListener("budgefi:network", reconnect);
     window.addEventListener("budgefi:resume", reloadBackend);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
     return () => {
       plaidPollGeneration.current += 1;
       window.removeEventListener("budgefi:network", reconnect);
       window.removeEventListener("budgefi:resume", reloadBackend);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
   }, []);
+
+  useEffect(() => {
+    if (
+      backendStatus !== "connected" ||
+      dataMode === "manual" ||
+      !sourceStale ||
+      document.visibilityState !== "visible"
+    )
+      return;
+    const timer = window.setTimeout(() => void reloadBackend(), 20_000);
+    return () => window.clearTimeout(timer);
+  }, [backendStatus, connections, dataMode, sourceStale]);
 
   const completeOnboarding = () => mutate(() => api.completeOnboarding());
   const saveElectric = (value: number) => {

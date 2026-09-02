@@ -1,4 +1,5 @@
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
+import { useState } from "react";
 import {
   AlertTriangle,
   ChevronLeft,
@@ -357,6 +358,7 @@ export function HealthSheet({ children }: { children: React.ReactNode }) {
     backendError,
     reloadBackend,
   } = useAppState();
+  const [checking, setChecking] = useState(false);
   const manual = dataMode === "manual";
   const shown = accounts.filter((account) =>
     manual ? account.provenance === "manual" : account.provenance !== "manual"
@@ -422,6 +424,27 @@ export function HealthSheet({ children }: { children: React.ReactNode }) {
             <RefreshCw className="size-4" />
             Try again
           </Button>
+        )}
+        {backendStatus !== "unavailable" && sourceStale && !manual && (
+          <div className="mt-4 grid gap-2">
+            <Button
+              disabled={checking}
+              onClick={async () => {
+                setChecking(true);
+                await reloadBackend();
+                setChecking(false);
+              }}
+              className="w-full"
+            >
+              <RefreshCw className={cn("size-4", checking && "animate-spin")} />
+              {checking ? "Checking accounts" : "Check again"}
+            </Button>
+            <SheetClose asChild>
+              <Button asChild variant="outline" className="w-full">
+                <Link to="/connections">Review accounts &amp; sync</Link>
+              </Button>
+            </SheetClose>
+          </div>
         )}
         {backendStatus === "connected" && !sourceStale && (
           <div className="mt-5 flex items-center gap-3 rounded-xl bg-leaf/8 p-4 text-leaf">
