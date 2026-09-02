@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { Inject, Injectable } from "@nestjs/common";
+import { Inject, Injectable, NotFoundException } from "@nestjs/common";
 import { sql } from "kysely";
 import {
   onboardingAnalysisResponseSchema,
@@ -20,6 +20,7 @@ import {
   InsightsGateway,
   type PatternClassification,
 } from "./insights.gateway.js";
+import { featureEnabled } from "../config/feature-flags.js";
 
 const PROMPT_VERSION = "onboarding-patterns-v1";
 
@@ -49,6 +50,9 @@ export class InsightsService {
     identity: RequestIdentity,
     request: OnboardingAnalysisRequest,
   ): Promise<OnboardingAnalysisResponse> {
+    if (!featureEnabled("onboardingAi")) {
+      throw new NotFoundException("This feature is not available");
+    }
     const snapshot = await this.loadSnapshot(identity);
     const fingerprint = fingerprintSnapshot(snapshot);
     if (!request.refresh) {
@@ -165,7 +169,11 @@ export class InsightsService {
       `.execute(db);
       const today = new Date();
       const horizon = new Date(
-        Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()),
+        Date.UTC(
+          today.getUTCFullYear(),
+          today.getUTCMonth(),
+          today.getUTCDate(),
+        ),
       );
       horizon.setUTCDate(horizon.getUTCDate() + plan.planning_horizon_days);
       return {
@@ -256,14 +264,17 @@ function buildSuggestions(
   }[],
   horizonEnd: string,
 ): OnboardingAnalysisResponse["suggestions"] {
-  const commitments: OnboardingAnalysisResponse["suggestions"]["commitments"] = [];
-  const needsReview: OnboardingAnalysisResponse["suggestions"]["needsReview"] = [];
+  const commitments: OnboardingAnalysisResponse["suggestions"]["commitments"] =
+    [];
+  const needsReview: OnboardingAnalysisResponse["suggestions"]["needsReview"] =
+    [];
   const incomes: OnboardingAnalysisResponse["suggestions"]["needsReview"] = [];
   const savings: OnboardingAnalysisResponse["suggestions"]["needsReview"] = [];
   const ordinary: OnboardingAnalysisResponse["suggestions"]["filtered"] = [];
   for (const candidate of candidates) {
     const classification =
-      classifications.get(candidate.candidateId) ?? fallbackClassification(candidate);
+      classifications.get(candidate.candidateId) ??
+      fallbackClassification(candidate);
     const strong =
       candidate.observations.length >= 3 && candidate.recurrenceScore >= 0.88;
     const suggestion = {
@@ -281,10 +292,11 @@ function buildSuggestions(
       confidence: strong ? ("strong" as const) : ("review" as const),
       variableAmount: candidate.amountVariable,
       observationCount: candidate.observations.length,
-      explanation: `${candidate.observations.length} ${cadenceLabel(candidate.cadence)} occurrences. ${classification.explanation}`.slice(
-        0,
-        240,
-      ),
+      explanation:
+        `${candidate.observations.length} ${cadenceLabel(candidate.cadence)} occurrences. ${classification.explanation}`.slice(
+          0,
+          240,
+        ),
     };
     if (classification.kind === "income") incomes.push(suggestion);
     else if (classification.kind === "savings") savings.push(suggestion);
@@ -340,23 +352,76 @@ function fallbackClassification(
 ): PatternClassification {
   const name = normalizeMerchant(candidate.merchant);
   if (isKnownInvestmentTransfer(name))
-    return classification(candidate, "savings", "savings", "Recognized as a recurring investment transfer");
+    return classification(
+      candidate,
+      "savings",
+      "savings",
+      "Recognized as a recurring investment transfer",
+    );
   if (/\b(transfer|card payment|credit card|loan payment)\b/.test(name))
-    return classification(candidate, "internal_transfer", "other", "Looks like money moving between accounts");
+    return classification(
+      candidate,
+      "internal_transfer",
+      "other",
+      "Looks like money moving between accounts",
+    );
   if (candidate.direction === "credit") {
     if (/\b(payroll|salary|direct deposit|pension|benefit)\b/.test(name))
-      return classification(candidate, "income", "income", "Label is consistent with a regular income source");
-    return classification(candidate, "unknown", "other", "Recurring credit is not clearly income");
+      return classification(
+        candidate,
+        "income",
+        "income",
+        "Label is consistent with a regular income source",
+      );
+    return classification(
+      candidate,
+      "unknown",
+      "other",
+      "Recurring credit is not clearly income",
+    );
   }
   if (/\b(rent|mortgage|property management|apartments?)\b/.test(name))
-    return classification(candidate, "bill", "housing", "Looks like a housing payment");
-  if (/\b(electric|energy|power|water|sewer|utility|utilities|internet|wireless|mobile|phone|gas company)\b/.test(name))
-    return classification(candidate, "bill", "utilities", "Looks like a household utility");
+    return classification(
+      candidate,
+      "bill",
+      "housing",
+      "Looks like a housing payment",
+    );
+  if (
+    /\b(electric|energy|power|water|sewer|utility|utilities|internet|wireless|mobile|phone|gas company)\b/.test(
+      name,
+    )
+  )
+    return classification(
+      candidate,
+      "bill",
+      "utilities",
+      "Looks like a household utility",
+    );
   if (/\binsurance\b/.test(name))
-    return classification(candidate, "bill", "insurance", "Looks like an insurance payment");
-  if (/\b(netflix|spotify|hulu|disney|youtube|apple com bill|subscription|membership)\b/.test(name))
-    return classification(candidate, "subscription", "subscription", "Looks like a recurring subscription");
-  return classification(candidate, "bill", "bill", "Consistent recurring debit pattern");
+    return classification(
+      candidate,
+      "bill",
+      "insurance",
+      "Looks like an insurance payment",
+    );
+  if (
+    /\b(netflix|spotify|hulu|disney|youtube|apple com bill|subscription|membership)\b/.test(
+      name,
+    )
+  )
+    return classification(
+      candidate,
+      "subscription",
+      "subscription",
+      "Looks like a recurring subscription",
+    );
+  return classification(
+    candidate,
+    "bill",
+    "bill",
+    "Consistent recurring debit pattern",
+  );
 }
 
 function classification(

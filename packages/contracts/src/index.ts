@@ -553,6 +553,18 @@ export const accountDeletionResponseSchema = z
   })
   .strict();
 
+export const featureFlagsResponseSchema = z
+  .object({
+    onboardingAi: z.boolean(),
+    householdMode: z.boolean(),
+  })
+  .strict();
+
+export const defaultFeatureFlags = Object.freeze({
+  onboardingAi: false,
+  householdMode: false,
+});
+
 export type PlanResponse = z.infer<typeof planResponseSchema>;
 export type ManualBalanceRequest = z.infer<typeof manualBalanceRequestSchema>;
 export type ManualTransactionRequest = z.infer<
@@ -563,8 +575,12 @@ export type PlanUpdateRequest = z.infer<typeof planUpdateRequestSchema>;
 export type ConnectionMutationRequest = z.infer<
   typeof connectionMutationRequestSchema
 >;
-export type NativeAuthTicketRequest = z.infer<typeof nativeAuthTicketRequestSchema>;
-export type NativeAuthTicketResponse = z.infer<typeof nativeAuthTicketResponseSchema>;
+export type NativeAuthTicketRequest = z.infer<
+  typeof nativeAuthTicketRequestSchema
+>;
+export type NativeAuthTicketResponse = z.infer<
+  typeof nativeAuthTicketResponseSchema
+>;
 export type PlaidLinkTokenRequest = z.infer<typeof plaidLinkTokenRequestSchema>;
 export type PlaidLinkTokenResponse = z.infer<
   typeof plaidLinkTokenResponseSchema
@@ -586,6 +602,7 @@ export type PlanCalibrationRequest = z.infer<
   typeof planCalibrationRequestSchema
 >;
 export type BootstrapResponse = z.infer<typeof bootstrapResponseSchema>;
+export type FeatureFlagsResponse = z.infer<typeof featureFlagsResponseSchema>;
 export type OnboardingAnalysisRequest = z.infer<
   typeof onboardingAnalysisRequestSchema
 >;

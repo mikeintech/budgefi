@@ -8,7 +8,9 @@ import {
 } from "react";
 import {
   bootstrapResponseSchema,
+  defaultFeatureFlags,
   type BootstrapResponse,
+  type FeatureFlagsResponse,
   type PlaidLinkTokenResponse,
 } from "@budgefi/contracts";
 import { api, requestId } from "@/lib/api";
@@ -158,6 +160,7 @@ type State = {
   sourceStale: boolean;
   workspaceName: string;
   bankConnectionsEnabled: boolean;
+  features: FeatureFlagsResponse;
   calibration: PlanCalibrationData;
   authoritativeProjection: AuthoritativeProjection;
   commitments: PlanCommitment[];
@@ -251,12 +254,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [sourceStale, setSourceStaleRaw] = useState(true);
   const [workspaceName, setWorkspaceName] = useState("My plan");
   const [bankConnectionsEnabled, setBankConnectionsEnabled] = useState(false);
+  const [features, setFeatures] =
+    useState<FeatureFlagsResponse>(defaultFeatureFlags);
   const [calibration, setCalibration] =
     useState<PlanCalibrationData>(defaultCalibration);
   const [planCalibrated, setPlanCalibrated] = useState(true);
   const electricMax = calibration.electricMax;
   const [planningBuffer, setPlanningBuffer] = useState(0);
-  const [householdMode, setHouseholdMode] = useState<HouseholdMode>("shared");
+  const [householdMode, setHouseholdMode] = useState<HouseholdMode>("solo");
   const [notificationMode, setNotificationMode] =
     useState<NotificationMode>("exceptions");
   const [weeklyDigest, setWeeklyDigest] = useState(true);
@@ -350,8 +355,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           ? "user_entered"
           : "observed",
       includeChase: bootstrap.accounts.some(
-        (account) =>
-          account.provenance === "plaid",
+        (account) => account.provenance === "plaid",
       ),
       includeJoint: false,
       rentName: "Rent",
@@ -505,7 +509,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const reloadBackend = async () => {
     if (!confirmedBootstrapRef.current) setBackendStatus("loading");
     try {
-      applyBootstrap(await api.bootstrap(), "network");
+      const [bootstrap, flags] = await Promise.all([
+        api.bootstrap(),
+        api.features().catch(() => defaultFeatureFlags),
+      ]);
+      setFeatures(flags);
+      applyBootstrap(bootstrap, "network");
     } catch (error) {
       if (!(await loadCachedBootstrap())) reportError(error);
     }
@@ -554,14 +563,19 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     // successful Link session behind an obsolete "Fix" warning.
     const deadline = Date.now() + 180_000;
     let delay = 1_500;
-    while (generation === plaidPollGeneration.current && Date.now() < deadline) {
+    while (
+      generation === plaidPollGeneration.current &&
+      Date.now() < deadline
+    ) {
       await new Promise((resolve) => window.setTimeout(resolve, delay));
       try {
         const bootstrap = await api.bootstrap();
         if (generation !== plaidPollGeneration.current) return;
         applyBootstrap(bootstrap, "network");
         const unsettled = bootstrap.connections.some((connection) =>
-          ["pending", "syncing", "revocation_pending"].includes(connection.status),
+          ["pending", "syncing", "revocation_pending"].includes(
+            connection.status,
+          ),
         );
         if (!unsettled) return;
         delay = Math.min(Math.round(delay * 1.6), 10_000);
@@ -921,6 +935,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       sourceStale,
       workspaceName,
       bankConnectionsEnabled,
+      features,
       calibration,
       authoritativeProjection,
       commitments,
@@ -968,6 +983,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       sourceStale,
       workspaceName,
       bankConnectionsEnabled,
+      features,
       calibration,
       authoritativeProjection,
       commitments,

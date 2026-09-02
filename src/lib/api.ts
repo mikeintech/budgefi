@@ -8,6 +8,7 @@ import {
   nativeAuthTicketResponseSchema,
   accountDeletionResponseSchema,
   onboardingAnalysisResponseSchema,
+  featureFlagsResponseSchema,
   type BootstrapResponse,
   type CommitmentRequest,
   type AccountInclusionRequest,
@@ -51,6 +52,8 @@ export const api = {
       nativeAuthTicketResponseSchema,
     ),
   bootstrap: () => request("/bootstrap", { method: "GET" }),
+  features: () =>
+    requestParsed("/features", { method: "GET" }, featureFlagsResponseSchema),
   completeOnboarding: () => request("/onboarding/complete", json("POST", {})),
   analyzeOnboarding: (body: OnboardingAnalysisRequest = { refresh: false }) =>
     requestParsed(

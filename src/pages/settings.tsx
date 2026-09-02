@@ -86,17 +86,20 @@ const sections = [
 ] as const;
 
 export function SettingsIndexPage() {
-  const availableSections = clerkConfigured && !isNativeApp
-    ? sections
-    : sections.filter((item) => item.slug !== "profile");
+  const { features } = useAppState();
+  const availableSections = sections.filter(
+    (item) =>
+      (item.slug !== "profile" || (clerkConfigured && !isNativeApp)) &&
+      (item.slug !== "household" || features.householdMode),
+  );
   return (
     <MobileShell>
       <main className="px-4 pb-8 pt-5">
         <p className="eyebrow">Durable preferences</p>
         <h1 className="text-[31px] font-bold tracking-[-0.045em]">Settings</h1>
         <p className="mt-1 text-sm leading-5 text-muted">
-          Manage household language, plan rules, and data access. Day-to-day
-          money inputs live in Manual and Plan.
+          Manage plan rules, notifications, security, and data access.
+          Day-to-day money inputs live in Manual and Plan.
         </p>
         <section className="mt-5 overflow-hidden rounded-[22px] border border-rule bg-white">
           {availableSections.map(({ slug, icon: Icon, title, detail }) => (
@@ -125,8 +128,11 @@ export function SettingsIndexPage() {
 
 export function SettingsDetailPage() {
   const { section } = useParams();
+  const { features } = useAppState();
   if (section === "calibration") return <Navigate to="/plan" replace />;
   if (section === "profile" && !clerkConfigured)
+    return <Navigate to="/settings" replace />;
+  if (section === "household" && !features.householdMode)
     return <Navigate to="/settings" replace />;
   if (!sections.some((item) => item.slug === section))
     return <Navigate to="/settings" replace />;
@@ -167,10 +173,16 @@ function ProfileSettings() {
       <>
         <p className="eyebrow">Settings</p>
         <h1 className="text-[29px] font-bold tracking-[-0.045em]">Account</h1>
-        <div role="alert" className="mt-5 rounded-[22px] border border-coral/25 bg-coral/[.05] p-5">
-          <p className="text-sm font-semibold">Account settings need attention</p>
+        <div
+          role="alert"
+          className="mt-5 rounded-[22px] border border-coral/25 bg-coral/[.05] p-5"
+        >
+          <p className="text-sm font-semibold">
+            Account settings need attention
+          </p>
           <p className="mt-2 text-sm leading-6 text-muted">
-            Profile editing is temporarily unavailable because account removal must go through Budgefi’s verified data-deletion process.
+            Profile editing is temporarily unavailable because account removal
+            must go through Budgefi’s verified data-deletion process.
           </p>
           <Button asChild variant="outline" className="mt-4 w-full bg-white">
             <Link to="/settings/privacy">Open privacy & data</Link>
@@ -190,7 +202,8 @@ function ProfileSettings() {
               colorPrimary: "#3155c6",
               colorBackground: "#fffcf4",
               borderRadius: "1rem",
-              fontFamily: "Instrument Sans, ui-sans-serif, system-ui, sans-serif",
+              fontFamily:
+                "Instrument Sans, ui-sans-serif, system-ui, sans-serif",
             },
             elements: {
               rootBox: "w-full",

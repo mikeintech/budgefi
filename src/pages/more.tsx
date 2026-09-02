@@ -78,13 +78,7 @@ function AuthSessionControl() {
 }
 
 export function MorePage() {
-  const {
-    sourceStale,
-    householdMode,
-    dataMode,
-    workspaceName,
-    commitments,
-  } = useAppState();
+  const { sourceStale, dataMode, workspaceName, commitments } = useAppState();
   const initials =
     workspaceName
       .split(/\s+/)
@@ -98,7 +92,7 @@ export function MorePage() {
         <p className="eyebrow">Workspace & controls</p>
         <h1 className="text-[31px] font-bold tracking-[-0.04em]">More</h1>
         <Link
-          to="/settings/household"
+          to="/settings"
           className="mt-5 block rounded-[24px] bg-ink p-5 text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pencil"
         >
           <div className="flex items-center gap-3">
@@ -107,14 +101,12 @@ export function MorePage() {
             </span>
             <div>
               <p className="font-semibold">{workspaceName}</p>
-              <p className="text-xs text-white/75">Private household plan</p>
+              <p className="text-xs text-white/75">Private personal plan</p>
             </div>
           </div>
           <div className="mt-4 flex items-center gap-2 text-xs text-white/70">
             <Shield className="size-4 text-citron" strokeWidth={1.8} />
-            {householdMode === "shared"
-              ? "Shared household language"
-              : "Personal planning language"}
+            Your planning preferences
             <ChevronRight className="ml-auto size-4" />
           </div>
         </Link>
@@ -142,7 +134,7 @@ export function MorePage() {
             to="/settings"
             icon={Settings2}
             title="Settings"
-            detail="Household language, plan rules, and privacy"
+            detail="Plan rules, notifications, security, and privacy"
           />
           <InfoSheet
             icon={HelpCircle}

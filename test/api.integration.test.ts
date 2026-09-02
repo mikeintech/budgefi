@@ -7,7 +7,10 @@ import { SignJWT, type JWK } from "jose";
 import pg from "pg";
 import type { AccountBase, Transaction } from "plaid";
 import { v7 as uuidv7 } from "uuid";
-import { bootstrapResponseSchema } from "../packages/contracts/src/index.js";
+import {
+  bootstrapResponseSchema,
+  featureFlagsResponseSchema,
+} from "../packages/contracts/src/index.js";
 import { onboardingAnalysisResponseSchema } from "../packages/contracts/src/index.js";
 import { PlaidRequestError, type PlaidSyncPage } from "../apps/api/src/plaid/plaid.gateway.js";
 import { PlaidService } from "../apps/api/src/plaid/plaid.service.js";
@@ -44,6 +47,8 @@ describe("Budgefi API with PostgreSQL", () => {
     process.env.PLAID_TOKEN_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
     process.env.PLAID_WORKER_DISABLED = "true";
     process.env.OPENAI_FINANCE_ENABLED = "false";
+    process.env.FEATURE_ONBOARDING_AI = "true";
+    process.env.FEATURE_HOUSEHOLD_MODE = "false";
     process.env.CLERK_WEBHOOK_SIGNING_SECRET = `whsec_${Buffer.alloc(32, 9).toString("base64")}`;
     admin = new pg.Client({ connectionString: testDatabaseUrl });
     await admin.connect();
@@ -65,7 +70,10 @@ describe("Budgefi API with PostgreSQL", () => {
     await resetFixture(admin);
     const [{ AppModule }, { ErrorFilter }, { PlaidGateway }] = await Promise.all([import("../apps/api/src/app.module.js"), import("../apps/api/src/http/error.filter.js"), import("../apps/api/src/plaid/plaid.gateway.js")]);
     fakePlaid = new FakePlaidGateway();
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).overrideProvider(PlaidGateway).useValue(fakePlaid).compile();
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(PlaidGateway)
+      .useValue(fakePlaid)
+      .compile();
     app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter(), { logger: ["error"], rawBody: true });
     app.setGlobalPrefix("v1");
     app.useGlobalFilters(new ErrorFilter());
@@ -84,6 +92,15 @@ describe("Budgefi API with PostgreSQL", () => {
     delete process.env.RUNTIME_DATABASE_URL;
   });
 
+  it("serves authenticated, typed product feature flags", async () => {
+    const response = await inject("GET", "/v1/features", undefined, "dev|maya");
+    expect(response.statusCode).toBe(200);
+    expect(featureFlagsResponseSchema.parse(response.json())).toEqual({
+      onboardingAi: true,
+      householdMode: false,
+    });
+  });
+
   it("returns an authoritative integer-money projection", async () => {
     const response = await inject("GET", "/v1/bootstrap", undefined, "dev|maya");
     expect(response.statusCode).toBe(200);
@@ -96,11 +113,25 @@ describe("Budgefi API with PostgreSQL", () => {
 
   it("persists a manual balance across independent reads", async () => {
     const requestId = uuidv7();
-    const firstPayload = { accountId: ids.accountA, amount: { minor: "500000" as const, currency: "USD" as const }, asOf: new Date().toISOString(), requestId };
+    const firstPayload = {
+      accountId: ids.accountA,
+      amount: { minor: "500000" as const, currency: "USD" as const },
+      asOf: new Date().toISOString(),
+      requestId,
+    };
     const saved = await inject("POST", "/v1/manual/balances", firstPayload, "dev|maya");
     expect(saved.statusCode).toBe(201);
     expect(bootstrapResponseSchema.parse(saved.json()).plan.knownCash.minor).toBe("500000");
-    const later = await inject("POST", "/v1/manual/balances", { ...firstPayload, amount: { minor: "600000", currency: "USD" }, requestId: uuidv7() }, "dev|maya");
+    const later = await inject(
+      "POST",
+      "/v1/manual/balances",
+      {
+        ...firstPayload,
+        amount: { minor: "600000", currency: "USD" },
+        requestId: uuidv7(),
+      },
+      "dev|maya",
+    );
     expect(bootstrapResponseSchema.parse(later.json()).plan.knownCash.minor).toBe("600000");
     const retriedFirst = await inject("POST", "/v1/manual/balances", firstPayload, "dev|maya");
     expect(bootstrapResponseSchema.parse(retriedFirst.json()).plan.knownCash.minor).toBe("600000");
@@ -110,7 +141,17 @@ describe("Budgefi API with PostgreSQL", () => {
 
   it("keeps distinct calculation evidence when different observations have equal totals", async () => {
     for (let index = 0; index < 2; index += 1) {
-      const response = await inject("POST", "/v1/manual/balances", { accountId: ids.accountA, amount: { minor: "423039", currency: "USD" }, asOf: new Date(Date.now() + index).toISOString(), requestId: uuidv7() }, "dev|maya");
+      const response = await inject(
+        "POST",
+        "/v1/manual/balances",
+        {
+          accountId: ids.accountA,
+          amount: { minor: "423039", currency: "USD" },
+          asOf: new Date(Date.now() + index).toISOString(),
+          requestId: uuidv7(),
+        },
+        "dev|maya",
+      );
       expect(response.statusCode).toBe(201);
     }
     const snapshots = await admin.query<{ count: number }>("SELECT count(*)::int AS count FROM calculation_snapshots WHERE household_id = $1", [ids.householdA]);
@@ -124,7 +165,12 @@ describe("Budgefi API with PostgreSQL", () => {
 
   it("applies an idempotent commitment request exactly once", async () => {
     const requestId = uuidv7();
-    const payload = { name: "Phone", amount: { minor: "7422", currency: "USD" }, dueDate: "2026-09-09", requestId };
+    const payload = {
+      name: "Phone",
+      amount: { minor: "7422", currency: "USD" },
+      dueDate: "2026-09-09",
+      requestId,
+    };
     const first = await inject("POST", "/v1/commitments", payload, "dev|maya");
     const second = await inject("POST", "/v1/commitments", payload, "dev|maya");
     expect(first.statusCode).toBe(201);
@@ -150,25 +196,63 @@ describe("Budgefi API with PostgreSQL", () => {
     );
     expect(created.statusCode).toBe(201);
     const body = bootstrapResponseSchema.parse(created.json());
-    expect(
-      body.plan.commitments.find((item) => item.name === "Flexible goal")
-        ?.dueDate,
-    ).toBeNull();
+    expect(body.plan.commitments.find((item) => item.name === "Flexible goal")?.dueDate).toBeNull();
   });
 
   it("rejects unknown fields and invalid money at the contract boundary", async () => {
-    const response = await inject("POST", "/v1/commitments", { name: "Bad", amount: { minor: "1.25", currency: "USD" }, dueDate: null, requestId: uuidv7(), surprise: true }, "dev|maya");
+    const response = await inject(
+      "POST",
+      "/v1/commitments",
+      {
+        name: "Bad",
+        amount: { minor: "1.25", currency: "USD" },
+        dueDate: null,
+        requestId: uuidv7(),
+        surprise: true,
+      },
+      "dev|maya",
+    );
     expect(response.statusCode).toBe(400);
     expect(response.json().error.code).toBe("validation_failed");
-    const impossibleDate = await inject("POST", "/v1/commitments", { name: "Impossible", amount: { minor: "100", currency: "USD" }, dueDate: "2026-02-31", requestId: uuidv7() }, "dev|maya");
+    const impossibleDate = await inject(
+      "POST",
+      "/v1/commitments",
+      {
+        name: "Impossible",
+        amount: { minor: "100", currency: "USD" },
+        dueDate: "2026-02-31",
+        requestId: uuidv7(),
+      },
+      "dev|maya",
+    );
     expect(impossibleDate.statusCode).toBe(400);
   });
 
   it("uses optimistic concurrency for plan edits", async () => {
     const current = bootstrapResponseSchema.parse((await inject("GET", "/v1/bootstrap", undefined, "dev|maya")).json());
-    const first = await inject("PUT", "/v1/plan", { expectedVersion: current.plan.version, plannedSavings: { minor: "51000", currency: "USD" }, safetyBuffer: { minor: "28000", currency: "USD" }, requestId: uuidv7() }, "dev|maya");
+    const first = await inject(
+      "PUT",
+      "/v1/plan",
+      {
+        expectedVersion: current.plan.version,
+        plannedSavings: { minor: "51000", currency: "USD" },
+        safetyBuffer: { minor: "28000", currency: "USD" },
+        requestId: uuidv7(),
+      },
+      "dev|maya",
+    );
     expect(first.statusCode).toBe(200);
-    const stale = await inject("PUT", "/v1/plan", { expectedVersion: current.plan.version, plannedSavings: { minor: "52000", currency: "USD" }, safetyBuffer: { minor: "28000", currency: "USD" }, requestId: uuidv7() }, "dev|maya");
+    const stale = await inject(
+      "PUT",
+      "/v1/plan",
+      {
+        expectedVersion: current.plan.version,
+        plannedSavings: { minor: "52000", currency: "USD" },
+        safetyBuffer: { minor: "28000", currency: "USD" },
+        requestId: uuidv7(),
+      },
+      "dev|maya",
+    );
     expect(stale.statusCode).toBe(409);
   });
 
@@ -194,19 +278,80 @@ describe("Budgefi API with PostgreSQL", () => {
 
   it("permits only owners and administrators to mutate financial truth", async () => {
     const attempts = [
-      ["POST", "/v1/manual/balances", { accountId: ids.accountA, amount: { minor: "1", currency: "USD" }, asOf: new Date().toISOString(), requestId: uuidv7() }],
-      ["POST", "/v1/manual/transactions", { accountId: ids.accountA, merchant: "Nope", amount: { minor: "1", currency: "USD" }, occurredOn: "2026-08-31", requestId: uuidv7() }],
-      ["POST", "/v1/commitments", { name: "Nope", amount: { minor: "1", currency: "USD" }, dueDate: null, requestId: uuidv7() }],
-      ["PUT", "/v1/plan", { expectedVersion: 1, plannedSavings: { minor: "1", currency: "USD" }, safetyBuffer: { minor: "1", currency: "USD" }, requestId: uuidv7() }],
+      [
+        "POST",
+        "/v1/manual/balances",
+        {
+          accountId: ids.accountA,
+          amount: { minor: "1", currency: "USD" },
+          asOf: new Date().toISOString(),
+          requestId: uuidv7(),
+        },
+      ],
+      [
+        "POST",
+        "/v1/manual/transactions",
+        {
+          accountId: ids.accountA,
+          merchant: "Nope",
+          amount: { minor: "1", currency: "USD" },
+          occurredOn: "2026-08-31",
+          requestId: uuidv7(),
+        },
+      ],
+      [
+        "POST",
+        "/v1/commitments",
+        {
+          name: "Nope",
+          amount: { minor: "1", currency: "USD" },
+          dueDate: null,
+          requestId: uuidv7(),
+        },
+      ],
+      [
+        "PUT",
+        "/v1/plan",
+        {
+          expectedVersion: 1,
+          plannedSavings: { minor: "1", currency: "USD" },
+          safetyBuffer: { minor: "1", currency: "USD" },
+          requestId: uuidv7(),
+        },
+      ],
       ["PUT", `/v1/accounts/${ids.accountA}/inclusion`, { expectedVersion: 1, includeInPlan: false, requestId: uuidv7() }],
-      ["PUT", "/v1/plan/calibration", { expectedVersion: 1, plannedSavings: { minor: "1", currency: "USD" }, safetyBuffer: { minor: "1", currency: "USD" }, commitments: [], requestId: uuidv7() }],
+      [
+        "PUT",
+        "/v1/plan/calibration",
+        {
+          expectedVersion: 1,
+          plannedSavings: { minor: "1", currency: "USD" },
+          safetyBuffer: { minor: "1", currency: "USD" },
+          commitments: [],
+          requestId: uuidv7(),
+        },
+      ],
     ] as const;
     for (const role of ["member", "viewer"] as const) {
       await admin.query("UPDATE household_memberships SET role = $1 WHERE household_id = $2 AND user_id = $3", [role, ids.householdA, ids.userA]);
       for (const [method, url, payload] of attempts) expect((await inject(method, url, payload, "dev|maya")).statusCode).toBe(403);
     }
     await admin.query("UPDATE household_memberships SET role = 'admin' WHERE household_id = $1 AND user_id = $2", [ids.householdA, ids.userA]);
-    expect((await inject("POST", "/v1/commitments", { name: "Allowed", amount: { minor: "1", currency: "USD" }, dueDate: null, requestId: uuidv7() }, "dev|maya")).statusCode).toBe(201);
+    expect(
+      (
+        await inject(
+          "POST",
+          "/v1/commitments",
+          {
+            name: "Allowed",
+            amount: { minor: "1", currency: "USD" },
+            dueDate: null,
+            requestId: uuidv7(),
+          },
+          "dev|maya",
+        )
+      ).statusCode,
+    ).toBe(201);
   });
 
   it("includes only explicitly planned liquid assets in known cash", async () => {
@@ -252,9 +397,22 @@ describe("Budgefi API with PostgreSQL", () => {
     const requestId = uuidv7();
     const payload = {
       expectedVersion: before.plan.version,
-      manualBalance: { accountId: ids.accountA, amount: { minor: "450000", currency: "USD" }, asOf: new Date().toISOString() },
-      plannedSavings: { minor: "60000", currency: "USD" }, safetyBuffer: { minor: "30000", currency: "USD" },
-      commitments: before.plan.commitments.map((item) => ({ id: item.id, expectedVersion: item.version, name: item.name === "Electric" ? "Power bill" : item.name, amount: item.name === "Electric" ? { minor: "17000", currency: "USD" } : item.amount, dueDate: item.dueDate })), removeCommitments: [], requestId,
+      manualBalance: {
+        accountId: ids.accountA,
+        amount: { minor: "450000", currency: "USD" },
+        asOf: new Date().toISOString(),
+      },
+      plannedSavings: { minor: "60000", currency: "USD" },
+      safetyBuffer: { minor: "30000", currency: "USD" },
+      commitments: before.plan.commitments.map((item) => ({
+        id: item.id,
+        expectedVersion: item.version,
+        name: item.name === "Electric" ? "Power bill" : item.name,
+        amount: item.name === "Electric" ? { minor: "17000", currency: "USD" } : item.amount,
+        dueDate: item.dueDate,
+      })),
+      removeCommitments: [],
+      requestId,
     } as const;
     const saved = bootstrapResponseSchema.parse((await inject("PUT", "/v1/plan/calibration", payload, "dev|maya")).json());
     expect(saved.plan.knownCash.minor).toBe("450000");
@@ -270,12 +428,7 @@ describe("Budgefi API with PostgreSQL", () => {
   });
 
   it("does not expose the retired interactive sample connection API", async () => {
-    const response = await inject(
-      "POST",
-      "/v1/connections/sample",
-      { requestId: uuidv7() },
-      "dev|maya",
-    );
+    const response = await inject("POST", "/v1/connections/sample", { requestId: uuidv7() }, "dev|maya");
     expect(response.statusCode).toBe(404);
   });
 
@@ -283,30 +436,21 @@ describe("Budgefi API with PostgreSQL", () => {
     const userId = "14000000-0000-4000-8000-000000000001";
     const householdId = "14000000-0000-4000-8000-000000000101";
     const clerkUserId = "user_webhook_fixture";
-    await admin.query(
-      "insert into users(id,auth_subject,display_name) values($1,$2,'Webhook Fixture')",
-      [userId, `clerk|${clerkUserId}`],
-    );
-    await admin.query(
-      "insert into households(id,name) values($1,'Webhook Fixture Household')",
-      [householdId],
-    );
-    await admin.query(
-      "insert into household_memberships(household_id,user_id,role) values($1,$2,'owner')",
-      [householdId, userId],
-    );
+    await admin.query("insert into users(id,auth_subject,display_name) values($1,$2,'Webhook Fixture')", [userId, `clerk|${clerkUserId}`]);
+    await admin.query("insert into households(id,name) values($1,'Webhook Fixture Household')", [householdId]);
+    await admin.query("insert into household_memberships(household_id,user_id,role) values($1,$2,'owner')", [householdId, userId]);
     const eventId = "msg_clerk_deletion_fixture";
     const timestamp = String(Math.floor(Date.now() / 1_000));
     const payload = JSON.stringify({
       type: "user.deleted",
       object: "event",
       data: { id: clerkUserId, object: "user", deleted: true },
-      event_attributes: { http_request: { client_ip: "127.0.0.1", user_agent: "integration" } },
+      event_attributes: {
+        http_request: { client_ip: "127.0.0.1", user_agent: "integration" },
+      },
     });
     const secret = Buffer.alloc(32, 9);
-    const signature = `v1,${createHmac("sha256", secret)
-      .update(`${eventId}.${timestamp}.${payload}`)
-      .digest("base64")}`;
+    const signature = `v1,${createHmac("sha256", secret).update(`${eventId}.${timestamp}.${payload}`).digest("base64")}`;
     const headers = {
       "content-type": "application/json",
       "svix-id": eventId,
@@ -320,48 +464,38 @@ describe("Budgefi API with PostgreSQL", () => {
       headers: { ...headers, "svix-signature": "v1,invalid" },
     });
     expect(tampered.statusCode).toBe(400);
-    const accepted = await app.inject({ method: "POST", url: "/v1/clerk/webhook", payload, headers });
+    const accepted = await app.inject({
+      method: "POST",
+      url: "/v1/clerk/webhook",
+      payload,
+      headers,
+    });
     expect(accepted.statusCode).toBe(202);
-    expect(accepted.json()).toEqual({ accepted: true, handled: true, duplicate: false });
-    const duplicate = await app.inject({ method: "POST", url: "/v1/clerk/webhook", payload, headers });
+    expect(accepted.json()).toEqual({
+      accepted: true,
+      handled: true,
+      duplicate: false,
+    });
+    const duplicate = await app.inject({
+      method: "POST",
+      url: "/v1/clerk/webhook",
+      payload,
+      headers,
+    });
     expect(duplicate.statusCode).toBe(202);
     expect(duplicate.json().duplicate).toBe(true);
-    expect(
-      (
-        await admin.query(
-          "select status from account_deletion_requests where user_id=$1 and household_id=$2",
-          [userId, householdId],
-        )
-      ).rows[0]?.status,
-    ).toBe("ready_to_finalize");
+    expect((await admin.query("select status from account_deletion_requests where user_id=$1 and household_id=$2", [userId, householdId])).rows[0]?.status).toBe("ready_to_finalize");
   });
 
   it("keeps legacy sample ledger rows out of every live bootstrap surface", async () => {
     const connectionId = uuidv7();
     const accountId = uuidv7();
-    await admin.query(
-      "INSERT INTO connections (id, household_id, provider, provider_item_id, status) VALUES ($1,$2,'sample','legacy-sample-item','healthy')",
-      [connectionId, ids.householdA],
-    );
-    await admin.query(
-      "INSERT INTO accounts (id, household_id, name, account_type, currency, provenance, connection_id, provider_account_id, include_in_plan) VALUES ($1,$2,'Legacy fixture checking','checking','USD','sample',$3,'legacy-sample-account',true)",
-      [accountId, ids.householdA, connectionId],
-    );
-    await admin.query(
-      "INSERT INTO balance_observations (household_id, account_id, amount_minor, currency, provenance, as_of, source_record_id) VALUES ($1,$2,999999,'USD','sample',now(),'legacy-sample-balance')",
-      [ids.householdA, accountId],
-    );
-    await admin.query(
-      "INSERT INTO financial_transactions (household_id, account_id, source_kind, source_record_id, merchant, amount_minor, currency, direction, occurred_on, status) VALUES ($1,$2,'sample','legacy-sample-charge','Legacy fixture merchant',9999,'USD','debit',current_date,'posted')",
-      [ids.householdA, accountId],
-    );
-    await admin.query(
-      "INSERT INTO activity_events (household_id, event_type, title, detail, provenance, entity_type, entity_id) VALUES ($1,'legacy.sample','Legacy fixture activity','Must remain outside the product','sample','connection',$2)",
-      [ids.householdA, connectionId],
-    );
-    const body = bootstrapResponseSchema.parse(
-      (await inject("GET", "/v1/bootstrap", undefined, "dev|maya")).json(),
-    );
+    await admin.query("INSERT INTO connections (id, household_id, provider, provider_item_id, status) VALUES ($1,$2,'sample','legacy-sample-item','healthy')", [connectionId, ids.householdA]);
+    await admin.query("INSERT INTO accounts (id, household_id, name, account_type, currency, provenance, connection_id, provider_account_id, include_in_plan) VALUES ($1,$2,'Legacy fixture checking','checking','USD','sample',$3,'legacy-sample-account',true)", [accountId, ids.householdA, connectionId]);
+    await admin.query("INSERT INTO balance_observations (household_id, account_id, amount_minor, currency, provenance, as_of, source_record_id) VALUES ($1,$2,999999,'USD','sample',now(),'legacy-sample-balance')", [ids.householdA, accountId]);
+    await admin.query("INSERT INTO financial_transactions (household_id, account_id, source_kind, source_record_id, merchant, amount_minor, currency, direction, occurred_on, status) VALUES ($1,$2,'sample','legacy-sample-charge','Legacy fixture merchant',9999,'USD','debit',current_date,'posted')", [ids.householdA, accountId]);
+    await admin.query("INSERT INTO activity_events (household_id, event_type, title, detail, provenance, entity_type, entity_id) VALUES ($1,'legacy.sample','Legacy fixture activity','Must remain outside the product','sample','connection',$2)", [ids.householdA, connectionId]);
+    const body = bootstrapResponseSchema.parse((await inject("GET", "/v1/bootstrap", undefined, "dev|maya")).json());
     expect(body.plan.knownCash.minor).toBe("423039");
     expect(body.accounts.some((item) => item.provenance === "sample")).toBe(false);
     expect(body.connections.some((item) => item.provider === "sample")).toBe(false);
@@ -376,23 +510,9 @@ describe("Budgefi API with PostgreSQL", () => {
       value.setUTCDate(value.getUTCDate() - daysAgo);
       return value.toISOString().slice(0, 10);
     };
-    const rows = [
-      ...[2, 16, 30, 44].map((days, index) => [`payroll-${index}`, "Payroll deposit", "220000", date(days), "credit"]),
-      ...[3, 33, 63].map((days, index) => [`internet-${index}`, "MetroNet", index === 0 ? "8320" : "8210", date(days), "debit"]),
-      ...[28, 58, 88].map((days, index) => [`rent-${index}`, "Juniper Apartments", "165000", date(days), "debit"]),
-      ...[24, 54, 84].map((days, index) => [`invest-${index}`, "Acorns", "2500", date(days), "debit"]),
-    ] as const;
-    for (const [sourceId, merchant, amount, occurredOn, direction] of rows)
-      await admin.query(
-        "INSERT INTO financial_transactions (household_id, account_id, source_kind, source_record_id, merchant, amount_minor, currency, direction, occurred_on, status) VALUES ($1,$2,'plaid',$3,$4,$5,'USD',$6,$7,'posted')",
-        [ids.householdA, ids.accountA, sourceId, merchant, amount, direction, occurredOn],
-      );
-    const analyzed = await inject(
-      "POST",
-      "/v1/insights/onboarding",
-      { refresh: false },
-      "dev|maya",
-    );
+    const rows = [...[2, 16, 30, 44].map((days, index) => [`payroll-${index}`, "Payroll deposit", "220000", date(days), "credit"]), ...[3, 33, 63].map((days, index) => [`internet-${index}`, "MetroNet", index === 0 ? "8320" : "8210", date(days), "debit"]), ...[28, 58, 88].map((days, index) => [`rent-${index}`, "Juniper Apartments", "165000", date(days), "debit"]), ...[24, 54, 84].map((days, index) => [`invest-${index}`, "Acorns", "2500", date(days), "debit"])] as const;
+    for (const [sourceId, merchant, amount, occurredOn, direction] of rows) await admin.query("INSERT INTO financial_transactions (household_id, account_id, source_kind, source_record_id, merchant, amount_minor, currency, direction, occurred_on, status) VALUES ($1,$2,'plaid',$3,$4,$5,'USD',$6,$7,'posted')", [ids.householdA, ids.accountA, sourceId, merchant, amount, direction, occurredOn]);
+    const analyzed = await inject("POST", "/v1/insights/onboarding", { refresh: false }, "dev|maya");
     expect(analyzed.statusCode, analyzed.body).toBe(201);
     const body = onboardingAnalysisResponseSchema.parse(analyzed.json());
     expect(body.state).toBe("ready");
@@ -402,23 +522,25 @@ describe("Budgefi API with PostgreSQL", () => {
     expect(body.suggestions.commitments).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: "MetroNet", category: "bill" }),
-        expect.objectContaining({ name: "Juniper Apartments", category: "housing" }),
+        expect.objectContaining({
+          name: "Juniper Apartments",
+          category: "housing",
+        }),
       ]),
     );
-    expect(body.suggestions.commitments.map((item) => item.name)).not.toContain(
-      "Online card payment",
-    );
-    const cached = onboardingAnalysisResponseSchema.parse(
-      (
-        await inject(
-          "POST",
-          "/v1/insights/onboarding",
-          { refresh: false },
-          "dev|maya",
-        )
-      ).json(),
-    );
+    expect(body.suggestions.commitments.map((item) => item.name)).not.toContain("Online card payment");
+    const cached = onboardingAnalysisResponseSchema.parse((await inject("POST", "/v1/insights/onboarding", { refresh: false }, "dev|maya")).json());
     expect(cached.generatedAt).toBe(body.generatedAt);
+  });
+
+  it("keeps onboarding analysis unavailable when its product flag is off", async () => {
+    process.env.FEATURE_ONBOARDING_AI = "false";
+    try {
+      const response = await inject("POST", "/v1/insights/onboarding", { refresh: false }, "dev|maya");
+      expect(response.statusCode).toBe(404);
+    } finally {
+      process.env.FEATURE_ONBOARDING_AI = "true";
+    }
   });
 
   it("keeps savings round-ups and pending replacements out of duplicate review", async () => {
@@ -440,12 +562,8 @@ describe("Budgefi API with PostgreSQL", () => {
         expect(response.statusCode).toBe(201);
       }
     }
-    const savings = bootstrapResponseSchema.parse(
-      (await inject("GET", "/v1/bootstrap", undefined, "dev|maya")).json(),
-    );
-    expect(
-      savings.cases.some((item) => item.title.includes("Round Up")),
-    ).toBe(false);
+    const savings = bootstrapResponseSchema.parse((await inject("GET", "/v1/bootstrap", undefined, "dev|maya")).json());
+    expect(savings.cases.some((item) => item.title.includes("Round Up"))).toBe(false);
 
     for (let index = 0; index < 2; index += 1)
       await inject(
@@ -460,35 +578,16 @@ describe("Budgefi API with PostgreSQL", () => {
         },
         "dev|maya",
       );
-    const ordinary = bootstrapResponseSchema.parse(
-      (await inject("GET", "/v1/bootstrap", undefined, "dev|maya")).json(),
-    );
-    expect(
-      ordinary.cases.some((item) =>
-        item.title.includes("Ordinary duplicate fixture"),
-      ),
-    ).toBe(true);
-    const duplicate = ordinary.cases.find((item) =>
-      item.title.includes("Ordinary duplicate fixture"),
-    )!;
+    const ordinary = bootstrapResponseSchema.parse((await inject("GET", "/v1/bootstrap", undefined, "dev|maya")).json());
+    expect(ordinary.cases.some((item) => item.title.includes("Ordinary duplicate fixture"))).toBe(true);
+    const duplicate = ordinary.cases.find((item) => item.title.includes("Ordinary duplicate fixture"))!;
     const decision = {
       decision: "expected" as const,
       expectedVersion: duplicate.version,
       requestId: uuidv7(),
     };
-    expect(
-      (await inject("POST", `/v1/cases/${duplicate.id}/decision`, decision, "dev|maya")).statusCode,
-    ).toBe(201);
-    expect(
-      (
-        await inject(
-          "POST",
-          `/v1/cases/${duplicate.id}/decision`,
-          { ...decision, requestId: uuidv7() },
-          "dev|maya",
-        )
-      ).statusCode,
-    ).toBe(409);
+    expect((await inject("POST", `/v1/cases/${duplicate.id}/decision`, decision, "dev|maya")).statusCode).toBe(201);
+    expect((await inject("POST", `/v1/cases/${duplicate.id}/decision`, { ...decision, requestId: uuidv7() }, "dev|maya")).statusCode).toBe(409);
   });
 
   it("surfaces every active commitment while reserving only overdue and in-horizon dated items", async () => {
@@ -511,25 +610,33 @@ describe("Budgefi API with PostgreSQL", () => {
     await admin.query("INSERT INTO commitments (id, household_id, name, amount_minor, currency, due_date, provenance) VALUES ($1, $2, 'Future tuition', 250000, 'USD', $3, 'manual')", [outsideId, ids.householdA, outsideDate]);
     const before = bootstrapResponseSchema.parse((await inject("GET", "/v1/bootstrap", undefined, "dev|maya")).json());
     expect(before.plan.commitments.some((item) => item.id === outsideId)).toBe(true);
-    const payload = { expectedVersion: before.plan.version, plannedSavings: before.plan.plannedSavings, safetyBuffer: before.plan.safetyBuffer, commitments: before.plan.commitments.map((item) => ({ id: item.id, expectedVersion: item.version, name: item.name, amount: item.amount, dueDate: item.dueDate })), removeCommitments: [], requestId: uuidv7() };
+    const payload = {
+      expectedVersion: before.plan.version,
+      plannedSavings: before.plan.plannedSavings,
+      safetyBuffer: before.plan.safetyBuffer,
+      commitments: before.plan.commitments.map((item) => ({
+        id: item.id,
+        expectedVersion: item.version,
+        name: item.name,
+        amount: item.amount,
+        dueDate: item.dueDate,
+      })),
+      removeCommitments: [],
+      requestId: uuidv7(),
+    };
     expect((await inject("PUT", "/v1/plan/calibration", payload, "dev|maya")).statusCode).toBe(200);
     const stored = await admin.query<{ active: boolean }>("SELECT active FROM commitments WHERE id = $1", [outsideId]);
     expect(stored.rows[0]?.active).toBe(true);
   });
 
   it("forces RLS on every household-owned table", async () => {
-    const result = await admin.query<{ relname: string; relrowsecurity: boolean; relforcerowsecurity: boolean }>("SELECT DISTINCT c.relname, c.relrowsecurity, c.relforcerowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace LEFT JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = 'household_id' AND NOT a.attisdropped WHERE n.nspname = 'public' AND c.relkind = 'r' AND (a.attname IS NOT NULL OR c.relname = 'households') ORDER BY c.relname");
+    const result = await admin.query<{
+      relname: string;
+      relrowsecurity: boolean;
+      relforcerowsecurity: boolean;
+    }>("SELECT DISTINCT c.relname, c.relrowsecurity, c.relforcerowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace LEFT JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = 'household_id' AND NOT a.attisdropped WHERE n.nspname = 'public' AND c.relkind = 'r' AND (a.attname IS NOT NULL OR c.relname = 'households') ORDER BY c.relname");
     expect(result.rows.map((row) => row.relname)).toEqual(expect.arrayContaining(["accounts", "activity_events", "balance_observations", "calculation_snapshot_inputs", "calculation_snapshots", "case_evidence", "commitment_revisions", "commitments", "connections", "exception_cases", "financial_transactions", "household_memberships", "households", "idempotency_records", "plan_revisions", "plans", "sync_runs", "webhook_receipts"]));
-    const ownerBypassTables = new Set([
-      "account_deletion_requests",
-      "connections",
-      "financial_pattern_analyses",
-      "notification_deliveries",
-      "notification_endpoints",
-      "notification_events",
-      "notification_preferences",
-      "plaid_sync_jobs",
-    ]);
+    const ownerBypassTables = new Set(["account_deletion_requests", "connections", "financial_pattern_analyses", "notification_deliveries", "notification_endpoints", "notification_events", "notification_preferences", "plaid_sync_jobs"]);
     expect(result.rows.every((row) => row.relrowsecurity)).toBe(true);
     expect(
       result.rows
@@ -537,69 +644,33 @@ describe("Budgefi API with PostgreSQL", () => {
         .map((row) => row.relname)
         .sort(),
     ).toEqual([...ownerBypassTables].sort());
-    const privileges = await admin.query<{ users_read: boolean; migrations_read: boolean; accounts_read: boolean }>("SELECT has_table_privilege('budgefi_app', 'users', 'SELECT') AS users_read, has_table_privilege('budgefi_app', 'schema_migrations', 'SELECT') AS migrations_read, has_table_privilege('budgefi_app', 'accounts', 'SELECT') AS accounts_read");
-    expect(privileges.rows[0]).toEqual({ users_read: false, migrations_read: false, accounts_read: true });
+    const privileges = await admin.query<{
+      users_read: boolean;
+      migrations_read: boolean;
+      accounts_read: boolean;
+    }>("SELECT has_table_privilege('budgefi_app', 'users', 'SELECT') AS users_read, has_table_privilege('budgefi_app', 'schema_migrations', 'SELECT') AS migrations_read, has_table_privilege('budgefi_app', 'accounts', 'SELECT') AS accounts_read");
+    expect(privileges.rows[0]).toEqual({
+      users_read: false,
+      migrations_read: false,
+      accounts_read: true,
+    });
   });
 
   it("hands household ownership to a successor before requesting account deletion", async () => {
-    await admin.query(
-      "insert into household_memberships(household_id,user_id,role,onboarding_completed_at) values($1,$2,'member',now())",
-      [ids.householdA, ids.userB],
-    );
-    const requested = await inject(
-      "POST",
-      "/v1/account/deletion",
-      { confirmation: "DELETE", requestId: uuidv7() },
-      "dev|maya",
-    );
+    await admin.query("insert into household_memberships(household_id,user_id,role,onboarding_completed_at) values($1,$2,'member',now())", [ids.householdA, ids.userB]);
+    const requested = await inject("POST", "/v1/account/deletion", { confirmation: "DELETE", requestId: uuidv7() }, "dev|maya");
     expect(requested.statusCode, requested.body).toBe(201);
-    expect(
-      (
-        await admin.query<{ role: string }>(
-          "select role from household_memberships where household_id=$1 and user_id=$2",
-          [ids.householdA, ids.userB],
-        )
-      ).rows[0]?.role,
-    ).toBe("owner");
-    expect(
-      (
-        await admin.query<{ status: string }>(
-          "select status from account_deletion_requests where household_id=$1 and user_id=$2",
-          [ids.householdA, ids.userA],
-        )
-      ).rows[0]?.status,
-    ).toBe("ready_to_finalize");
+    expect((await admin.query<{ role: string }>("select role from household_memberships where household_id=$1 and user_id=$2", [ids.householdA, ids.userB])).rows[0]?.role).toBe("owner");
+    expect((await admin.query<{ status: string }>("select status from account_deletion_requests where household_id=$1 and user_id=$2", [ids.householdA, ids.userA])).rows[0]?.status).toBe("ready_to_finalize");
   });
 
   it("blocks new bank links as soon as final-household deletion begins", async () => {
-    const issued = await inject(
-      "POST",
-      "/v1/plaid/link-token",
-      { mode: "create" },
-      "dev|maya",
-    );
+    const issued = await inject("POST", "/v1/plaid/link-token", { mode: "create" }, "dev|maya");
     expect(issued.statusCode).toBe(201);
-    const requested = await inject(
-      "POST",
-      "/v1/account/deletion",
-      { confirmation: "DELETE", requestId: uuidv7() },
-      "dev|maya",
-    );
+    const requested = await inject("POST", "/v1/account/deletion", { confirmation: "DELETE", requestId: uuidv7() }, "dev|maya");
     expect(requested.statusCode, requested.body).toBe(201);
-    expect(
-      (
-        await admin.query<{ lifecycle_state: string }>(
-          "select lifecycle_state from households where id=$1",
-          [ids.householdA],
-        )
-      ).rows[0]?.lifecycle_state,
-    ).toBe("deleting");
-    const link = await inject(
-      "POST",
-      "/v1/plaid/link-token",
-      { mode: "create" },
-      "dev|maya",
-    );
+    expect((await admin.query<{ lifecycle_state: string }>("select lifecycle_state from households where id=$1", [ids.householdA])).rows[0]?.lifecycle_state).toBe("deleting");
+    const link = await inject("POST", "/v1/plaid/link-token", { mode: "create" }, "dev|maya");
     expect(link.statusCode).toBe(409);
     expect(fakePlaid.linkCalls).toBe(1);
     const exchange = await inject(
@@ -635,12 +706,25 @@ describe("Budgefi API with PostgreSQL", () => {
     expect(firstBootstrap.cases).toHaveLength(0);
     expect(firstBootstrap.plan.commitments).toHaveLength(0);
     expect(bootstrapResponseSchema.parse(second.json()).household.id).toBe(householdId);
-    const counts = await admin.query<{ users: number; households: number; plans: number; accounts: number }>(`select
+    const counts = await admin.query<{
+      users: number;
+      households: number;
+      plans: number;
+      accounts: number;
+    }>(
+      `select
       (select count(*)::int from users where auth_subject = $1) users,
       (select count(*)::int from household_memberships m join users u on u.id = m.user_id where u.auth_subject = $1) households,
       (select count(*)::int from plans where household_id = $2) plans,
-      (select count(*)::int from accounts where household_id = $2) accounts`, [subject, householdId]);
-    expect(counts.rows[0]).toEqual({ users: 1, households: 1, plans: 1, accounts: 1 });
+      (select count(*)::int from accounts where household_id = $2) accounts`,
+      [subject, householdId],
+    );
+    expect(counts.rows[0]).toEqual({
+      users: 1,
+      households: 1,
+      plans: 1,
+      accounts: 1,
+    });
 
     const completed = await inject("POST", "/v1/onboarding/complete", {}, subject);
     expect(completed.statusCode).toBe(201);
@@ -663,19 +747,37 @@ describe("Budgefi API with PostgreSQL", () => {
     const link = await inject("POST", "/v1/plaid/link-token", { mode: "create" }, "dev|maya");
     expect(link.statusCode).toBe(201);
     const sessionId = link.json().sessionId as string;
-    const exchangePayload = { sessionId, publicToken: "public-sandbox-token", linkSessionId: "link-session-1", institution: { id: "ins_109508", name: "First Platypus Bank" }, requestId: uuidv7() };
+    const exchangePayload = {
+      sessionId,
+      publicToken: "public-sandbox-token",
+      linkSessionId: "link-session-1",
+      institution: { id: "ins_109508", name: "First Platypus Bank" },
+      requestId: uuidv7(),
+    };
     const exchanged = await inject("POST", "/v1/plaid/exchange", exchangePayload, "dev|maya");
     expect(exchanged.statusCode).toBe(201);
     const accepted = bootstrapResponseSchema.parse(exchanged.json());
     const connection = accepted.connections.find((item) => item.provider === "plaid");
-    expect(connection).toMatchObject({ environment: "sandbox", institutionName: "First Platypus Bank", status: "syncing", initialUpdateComplete: false });
+    expect(connection).toMatchObject({
+      environment: "sandbox",
+      institutionName: "First Platypus Bank",
+      status: "syncing",
+      initialUpdateComplete: false,
+    });
     expect(accepted.accounts.some((account) => account.provenance === "plaid")).toBe(false);
     expect(await processQueued(connection!.id)).toBe(true);
     const initial = bootstrapResponseSchema.parse((await inject("GET", "/v1/bootstrap", undefined, "dev|maya")).json());
     expect(initial.connections.find((item) => item.id === connection!.id)).toMatchObject({ status: "healthy", initialUpdateComplete: true });
     const plaidAccount = initial.accounts.find((account) => account.provenance === "plaid");
-    expect(plaidAccount).toMatchObject({ includeInPlan: false, coverage: "excluded", balance: { minor: "120034", currency: "USD" } });
-    expect(initial.transactions.find((transaction) => transaction.merchant === "Coffee Lab")).toMatchObject({ amount: { minor: "825", currency: "USD" }, status: "pending" });
+    expect(plaidAccount).toMatchObject({
+      includeInPlan: false,
+      coverage: "excluded",
+      balance: { minor: "120034", currency: "USD" },
+    });
+    expect(initial.transactions.find((transaction) => transaction.merchant === "Coffee Lab")).toMatchObject({
+      amount: { minor: "825", currency: "USD" },
+      status: "pending",
+    });
     expect(fakePlaid.exchangeCalls).toBe(1);
     const replay = await inject("POST", "/v1/plaid/exchange", { ...exchangePayload, requestId: uuidv7() }, "dev|maya");
     expect(replay.statusCode).toBe(201);
@@ -683,19 +785,32 @@ describe("Budgefi API with PostgreSQL", () => {
     const stored = await admin.query<{ encrypted: string }>("select encode(encrypted_access_token, 'escape') encrypted from connections where id = $1", [connection!.id]);
     expect(stored.rows[0]!.encrypted).not.toContain("access-sandbox-token");
 
-    fakePlaid.pages.set("cursor-initial", syncPage({
-      added: [plaidTransaction({ transaction_id: "posted-coffee", pending_transaction_id: "pending-coffee", pending: false, name: "Coffee Lab" })],
-      removed: [{ transaction_id: "pending-coffee", account_id: "plaid-checking" }],
-      nextCursor: "cursor-posted",
-      updateStatus: "HISTORICAL_UPDATE_COMPLETE",
-    }));
+    fakePlaid.pages.set(
+      "cursor-initial",
+      syncPage({
+        added: [
+          plaidTransaction({
+            transaction_id: "posted-coffee",
+            pending_transaction_id: "pending-coffee",
+            pending: false,
+            name: "Coffee Lab",
+          }),
+        ],
+        removed: [{ transaction_id: "pending-coffee", account_id: "plaid-checking" }],
+        nextCursor: "cursor-posted",
+        updateStatus: "HISTORICAL_UPDATE_COMPLETE",
+      }),
+    );
     const synchronized = await inject("POST", `/v1/plaid/connections/${connection!.id}/sync`, {}, "dev|maya");
     expect(synchronized.statusCode).toBe(201);
     expect(bootstrapResponseSchema.parse(synchronized.json()).connections.find((item) => item.id === connection!.id)?.status).toBe("syncing");
     expect(await processQueued(connection!.id)).toBe(true);
     const afterSync = bootstrapResponseSchema.parse((await inject("GET", "/v1/bootstrap", undefined, "dev|maya")).json());
     expect(afterSync.transactions.find((transaction) => transaction.merchant === "Coffee Lab" && transaction.status === "posted")).toBeTruthy();
-    const pendingRevision = await admin.query<{ revision: number; status: string }>("select revision, status from financial_transactions where household_id = $1 and source_kind = 'plaid' and source_record_id = 'pending-coffee' order by revision desc limit 1", [ids.householdA]);
+    const pendingRevision = await admin.query<{
+      revision: number;
+      status: string;
+    }>("select revision, status from financial_transactions where household_id = $1 and source_kind = 'plaid' and source_record_id = 'pending-coffee' order by revision desc limit 1", [ids.householdA]);
     expect(pendingRevision.rows[0]).toEqual({ revision: 2, status: "removed" });
     expect(afterSync.connections[0]?.historicalUpdateComplete).toBe(true);
 
@@ -711,36 +826,47 @@ describe("Budgefi API with PostgreSQL", () => {
   it("keeps the first healthy Item and revokes an accidental duplicate bank-link retry", async () => {
     fakePlaid.uniqueItems = true;
     const firstLink = await inject("POST", "/v1/plaid/link-token", { mode: "create" }, "dev|maya");
-    const firstExchange = await inject("POST", "/v1/plaid/exchange", {
-      sessionId: firstLink.json().sessionId,
-      publicToken: "public-first-item",
-      institution: { id: "ins_109508", name: "First Platypus Bank" },
-      requestId: uuidv7(),
-    }, "dev|maya");
+    const firstExchange = await inject(
+      "POST",
+      "/v1/plaid/exchange",
+      {
+        sessionId: firstLink.json().sessionId,
+        publicToken: "public-first-item",
+        institution: { id: "ins_109508", name: "First Platypus Bank" },
+        requestId: uuidv7(),
+      },
+      "dev|maya",
+    );
     const first = bootstrapResponseSchema.parse(firstExchange.json()).connections.find((item) => item.provider === "plaid")!;
     expect(await processQueued(first.id)).toBe(true);
 
     const secondLink = await inject("POST", "/v1/plaid/link-token", { mode: "create" }, "dev|maya");
-    const secondExchange = await inject("POST", "/v1/plaid/exchange", {
-      sessionId: secondLink.json().sessionId,
-      publicToken: "public-retry-item",
-      institution: { id: "ins_109508", name: "First Platypus Bank" },
-      requestId: uuidv7(),
-    }, "dev|maya");
+    const secondExchange = await inject(
+      "POST",
+      "/v1/plaid/exchange",
+      {
+        sessionId: secondLink.json().sessionId,
+        publicToken: "public-retry-item",
+        institution: { id: "ins_109508", name: "First Platypus Bank" },
+        requestId: uuidv7(),
+      },
+      "dev|maya",
+    );
     const second = bootstrapResponseSchema.parse(secondExchange.json()).connections.find((item) => item.provider === "plaid" && item.id !== first.id)!;
     expect(second.id).toBeTruthy();
     expect(await processQueued(second.id)).toBe(true);
 
-    const pending = await admin.query<{ id: string; status: string }>(
-      "select id,status from connections where id=any($1::uuid[]) order by created_at",
-      [[first.id, second.id]],
-    );
+    const pending = await admin.query<{ id: string; status: string }>("select id,status from connections where id=any($1::uuid[]) order by created_at", [[first.id, second.id]]);
     expect(pending.rows).toEqual([
       { id: first.id, status: "healthy" },
       { id: second.id, status: "revocation_pending" },
     ]);
     expect(await processQueued(second.id, "revoke")).toBe(true);
-    const retired = await admin.query<{ status: string; token_removed: boolean; duplicate_events: number }>(
+    const retired = await admin.query<{
+      status: string;
+      token_removed: boolean;
+      duplicate_events: number;
+    }>(
       `select c.status,
         c.encrypted_access_token is null as token_removed,
         (select count(*)::int from activity_events where household_id=$2 and event_type='connection.plaid.duplicate_retired') as duplicate_events
@@ -756,30 +882,98 @@ describe("Budgefi API with PostgreSQL", () => {
 
   it("verifies the raw Plaid webhook, deduplicates delivery, and rejects body tampering", async () => {
     await connectPlaid();
-    const payload = JSON.stringify({ webhook_type: "TRANSACTIONS", webhook_code: "SYNC_UPDATES_AVAILABLE", item_id: "item-sandbox", environment: "sandbox" });
+    const payload = JSON.stringify({
+      webhook_type: "TRANSACTIONS",
+      webhook_code: "SYNC_UPDATES_AVAILABLE",
+      item_id: "item-sandbox",
+      environment: "sandbox",
+    });
     const signature = await fakePlaid.signWebhook(payload);
-    const first = await app.inject({ method: "POST", url: "/v1/plaid/webhook", payload, headers: { "content-type": "application/json", "plaid-verification": signature } });
+    const first = await app.inject({
+      method: "POST",
+      url: "/v1/plaid/webhook",
+      payload,
+      headers: {
+        "content-type": "application/json",
+        "plaid-verification": signature,
+      },
+    });
     expect(first.statusCode).toBe(202);
     expect(first.json()).toEqual({ accepted: true, duplicate: false });
-    const duplicate = await app.inject({ method: "POST", url: "/v1/plaid/webhook", payload, headers: { "content-type": "application/json", "plaid-verification": signature } });
+    const duplicate = await app.inject({
+      method: "POST",
+      url: "/v1/plaid/webhook",
+      payload,
+      headers: {
+        "content-type": "application/json",
+        "plaid-verification": signature,
+      },
+    });
     expect(duplicate.statusCode).toBe(202);
     expect(duplicate.json()).toEqual({ accepted: true, duplicate: true });
-    const followupPayload = JSON.stringify({ webhook_type: "TRANSACTIONS", webhook_code: "SYNC_UPDATES_AVAILABLE", item_id: "item-sandbox", environment: "sandbox", sequence: 2 });
-    const followup = await app.inject({ method: "POST", url: "/v1/plaid/webhook", payload: followupPayload, headers: { "content-type": "application/json", "plaid-verification": await fakePlaid.signWebhook(followupPayload) } });
+    const followupPayload = JSON.stringify({
+      webhook_type: "TRANSACTIONS",
+      webhook_code: "SYNC_UPDATES_AVAILABLE",
+      item_id: "item-sandbox",
+      environment: "sandbox",
+      sequence: 2,
+    });
+    const followup = await app.inject({
+      method: "POST",
+      url: "/v1/plaid/webhook",
+      payload: followupPayload,
+      headers: {
+        "content-type": "application/json",
+        "plaid-verification": await fakePlaid.signWebhook(followupPayload),
+      },
+    });
     expect(followup.statusCode).toBe(202);
     const queued = await admin.query<{ receipts: number; jobs: number }>("select (select count(*)::int from webhook_receipts where household_id = $1) receipts, (select count(*)::int from plaid_sync_jobs where household_id = $1 and trigger = 'webhook') jobs", [ids.householdA]);
     expect(queued.rows[0]).toEqual({ receipts: 2, jobs: 1 });
-    const tampered = await app.inject({ method: "POST", url: "/v1/plaid/webhook", payload: payload.replace("SYNC_UPDATES_AVAILABLE", "DEFAULT_UPDATE"), headers: { "content-type": "application/json", "plaid-verification": signature } });
+    const tampered = await app.inject({
+      method: "POST",
+      url: "/v1/plaid/webhook",
+      payload: payload.replace("SYNC_UPDATES_AVAILABLE", "DEFAULT_UPDATE"),
+      headers: {
+        "content-type": "application/json",
+        "plaid-verification": signature,
+      },
+    });
     expect(tampered.statusCode).toBe(403);
     const expired = await fakePlaid.signWebhook(payload, Math.floor(Date.now() / 1_000) - 301);
-    expect((await app.inject({ method: "POST", url: "/v1/plaid/webhook", payload, headers: { "content-type": "application/json", "plaid-verification": expired } })).statusCode).toBe(403);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/v1/plaid/webhook",
+          payload,
+          headers: {
+            "content-type": "application/json",
+            "plaid-verification": expired,
+          },
+        })
+      ).statusCode,
+    ).toBe(403);
   });
 
   it("converges local revocation when Plaid reports permission already revoked", async () => {
     const connected = bootstrapResponseSchema.parse((await connectPlaid()).json());
     const connection = connected.connections.find((item) => item.provider === "plaid")!;
-    const payload = JSON.stringify({ webhook_type: "ITEM", webhook_code: "USER_PERMISSION_REVOKED", item_id: "item-sandbox", environment: "sandbox" });
-    const response = await app.inject({ method: "POST", url: "/v1/plaid/webhook", payload, headers: { "content-type": "application/json", "plaid-verification": await fakePlaid.signWebhook(payload) } });
+    const payload = JSON.stringify({
+      webhook_type: "ITEM",
+      webhook_code: "USER_PERMISSION_REVOKED",
+      item_id: "item-sandbox",
+      environment: "sandbox",
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/plaid/webhook",
+      payload,
+      headers: {
+        "content-type": "application/json",
+        "plaid-verification": await fakePlaid.signWebhook(payload),
+      },
+    });
     expect(response.statusCode).toBe(202);
     expect(await processQueued(connection.id, "revoke")).toBe(true);
     const bootstrap = bootstrapResponseSchema.parse((await inject("GET", "/v1/bootstrap", undefined, "dev|maya")).json());
@@ -790,31 +984,77 @@ describe("Budgefi API with PostgreSQL", () => {
   it("keeps webhook revocation durable across a worker crash and converges on retry", async () => {
     const connected = bootstrapResponseSchema.parse((await connectPlaid()).json());
     const connection = connected.connections.find((item) => item.provider === "plaid")!;
-    const payload = JSON.stringify({ webhook_type: "ITEM", webhook_code: "USER_PERMISSION_REVOKED", item_id: "item-sandbox", environment: "sandbox" });
+    const payload = JSON.stringify({
+      webhook_type: "ITEM",
+      webhook_code: "USER_PERMISSION_REVOKED",
+      item_id: "item-sandbox",
+      environment: "sandbox",
+    });
     const signature = await fakePlaid.signWebhook(payload);
     await admin.query(`create function test_block_revocation() returns trigger language plpgsql as $$ begin if new.status = 'revoked' then raise exception 'simulated crash boundary'; end if; return new; end $$`);
     await admin.query("create trigger test_block_revocation before update on connections for each row execute function test_block_revocation()");
     try {
-      expect((await app.inject({ method: "POST", url: "/v1/plaid/webhook", payload, headers: { "content-type": "application/json", "plaid-verification": signature } })).statusCode).toBe(202);
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/v1/plaid/webhook",
+            payload,
+            headers: {
+              "content-type": "application/json",
+              "plaid-verification": signature,
+            },
+          })
+        ).statusCode,
+      ).toBe(202);
       expect(await processQueued(connection.id, "revoke")).toBe(false);
-      const interrupted = await admin.query<{ receipts: number; status: string; token_present: boolean }>("select (select count(*)::int from webhook_receipts) receipts, status, encrypted_access_token is not null token_present from connections where id = $1", [connection.id]);
-      expect(interrupted.rows[0]).toEqual({ receipts: 1, status: "revocation_pending", token_present: true });
+      const interrupted = await admin.query<{
+        receipts: number;
+        status: string;
+        token_present: boolean;
+      }>("select (select count(*)::int from webhook_receipts) receipts, status, encrypted_access_token is not null token_present from connections where id = $1", [connection.id]);
+      expect(interrupted.rows[0]).toEqual({
+        receipts: 1,
+        status: "revocation_pending",
+        token_present: true,
+      });
     } finally {
       await admin.query("drop trigger if exists test_block_revocation on connections");
       await admin.query("drop function if exists test_block_revocation()");
     }
     expect((await inject("POST", `/v1/plaid/connections/${connection.id}/disconnect`, {}, "dev|maya")).statusCode).toBe(201);
     expect(await processQueued(connection.id, "revoke")).toBe(true);
-    const converged = await admin.query<{ receipts: number; status: string; token_present: boolean }>("select (select count(*)::int from webhook_receipts) receipts, status, encrypted_access_token is not null token_present from connections where id = $1", [connection.id]);
-    expect(converged.rows[0]).toEqual({ receipts: 1, status: "revoked", token_present: false });
+    const converged = await admin.query<{
+      receipts: number;
+      status: string;
+      token_present: boolean;
+    }>("select (select count(*)::int from webhook_receipts) receipts, status, encrypted_access_token is not null token_present from connections where id = $1", [connection.id]);
+    expect(converged.rows[0]).toEqual({
+      receipts: 1,
+      status: "revoked",
+      token_present: false,
+    });
   });
 
   it("restarts pagination from the committed cursor and fails closed on token tampering", async () => {
     const connected = bootstrapResponseSchema.parse((await connectPlaid()).json());
     const connection = connected.connections.find((item) => item.provider === "plaid")!;
     fakePlaid.syncCallCursors.length = 0;
-    fakePlaid.pages.set("cursor-initial", syncPage({ nextCursor: "page-2", hasMore: true, updateStatus: "NOT_READY" }));
-    fakePlaid.pages.set("page-2", syncPage({ nextCursor: "cursor-after-restart", updateStatus: "HISTORICAL_UPDATE_COMPLETE" }));
+    fakePlaid.pages.set(
+      "cursor-initial",
+      syncPage({
+        nextCursor: "page-2",
+        hasMore: true,
+        updateStatus: "NOT_READY",
+      }),
+    );
+    fakePlaid.pages.set(
+      "page-2",
+      syncPage({
+        nextCursor: "cursor-after-restart",
+        updateStatus: "HISTORICAL_UPDATE_COMPLETE",
+      }),
+    );
     fakePlaid.mutationFailuresRemaining = 1;
     const converged = await inject("POST", `/v1/plaid/connections/${connection.id}/sync`, {}, "dev|maya");
     expect(converged.statusCode).toBe(201);
@@ -854,18 +1094,29 @@ describe("Budgefi API with PostgreSQL", () => {
   it("reports a stored Item as connected but not synchronized when the initial job must retry", async () => {
     const link = await inject("POST", "/v1/plaid/link-token", { mode: "create" }, "dev|maya");
     fakePlaid.pages.clear();
-    const payload = { sessionId: link.json().sessionId, publicToken: "public-sync-failure", requestId: uuidv7() };
+    const payload = {
+      sessionId: link.json().sessionId,
+      publicToken: "public-sync-failure",
+      requestId: uuidv7(),
+    };
     const result = await inject("POST", "/v1/plaid/exchange", payload, "dev|maya");
     expect(result.statusCode).toBe(201);
     const connection = bootstrapResponseSchema.parse(result.json()).connections.find((item) => item.provider === "plaid")!;
-    expect(connection).toMatchObject({ status: "syncing", initialUpdateComplete: false });
+    expect(connection).toMatchObject({
+      status: "syncing",
+      initialUpdateComplete: false,
+    });
     expect(await processQueued(connection.id)).toBe(false);
     expect(fakePlaid.removedTokens).toEqual([]);
     expect((await inject("POST", "/v1/plaid/exchange", { ...payload, requestId: uuidv7() }, "dev|maya")).statusCode).toBe(201);
     expect(fakePlaid.exchangeCalls).toBe(1);
     const bootstrap = bootstrapResponseSchema.parse((await inject("GET", "/v1/bootstrap", undefined, "dev|maya")).json());
     expect(bootstrap.connections.find((item) => item.provider === "plaid")).toMatchObject({ status: "error", initialUpdateComplete: false });
-    expect(bootstrap.accounts.find((item) => item.provenance === "plaid")).toMatchObject({ balance: { minor: "120034", currency: "USD" }, includeInPlan: false, coverage: "excluded" });
+    expect(bootstrap.accounts.find((item) => item.provenance === "plaid")).toMatchObject({
+      balance: { minor: "120034", currency: "USD" },
+      includeInPlan: false,
+      coverage: "excluded",
+    });
   });
 
   it("reports a completed update session while keeping its failed sync visible", async () => {
@@ -873,7 +1124,11 @@ describe("Budgefi API with PostgreSQL", () => {
     const connection = connected.connections.find((item) => item.provider === "plaid")!;
     const link = await inject("POST", "/v1/plaid/link-token", { mode: "update", connectionId: connection.id }, "dev|maya");
     fakePlaid.pages.clear();
-    const payload = { sessionId: link.json().sessionId, linkSessionId: "update-link-session", requestId: uuidv7() };
+    const payload = {
+      sessionId: link.json().sessionId,
+      linkSessionId: "update-link-session",
+      requestId: uuidv7(),
+    };
     expect((await inject("POST", "/v1/plaid/update-complete", payload, "dev|maya")).statusCode).toBe(201);
     expect((await inject("POST", "/v1/plaid/update-complete", { ...payload, requestId: uuidv7() }, "dev|maya")).statusCode).toBe(201);
     expect(await processQueued(connection.id)).toBe(false);
@@ -884,12 +1139,15 @@ describe("Budgefi API with PostgreSQL", () => {
   it("runs an explicitly requested sync immediately even when an older retry is backed off", async () => {
     const connected = bootstrapResponseSchema.parse((await connectPlaid()).json());
     const connection = connected.connections.find((item) => item.provider === "plaid")!;
-    fakePlaid.pages.set("cursor-initial", syncPage({ nextCursor: "cursor-refreshed", updateStatus: "HISTORICAL_UPDATE_COMPLETE" }));
-    const delayedJobId = uuidv7();
-    await admin.query(
-      "insert into plaid_sync_jobs(id,household_id,connection_id,operation,trigger,state,available_at) values($1,$2,$3,'sync','recovery','queued',now()+interval '1 hour')",
-      [delayedJobId, ids.householdA, connection.id],
+    fakePlaid.pages.set(
+      "cursor-initial",
+      syncPage({
+        nextCursor: "cursor-refreshed",
+        updateStatus: "HISTORICAL_UPDATE_COMPLETE",
+      }),
     );
+    const delayedJobId = uuidv7();
+    await admin.query("insert into plaid_sync_jobs(id,household_id,connection_id,operation,trigger,state,available_at) values($1,$2,$3,'sync','recovery','queued',now()+interval '1 hour')", [delayedJobId, ids.householdA, connection.id]);
     const refreshed = await inject("POST", `/v1/plaid/connections/${connection.id}/sync`, {}, "dev|maya");
     expect(refreshed.statusCode).toBe(201);
     expect(bootstrapResponseSchema.parse(refreshed.json()).connections.find((item) => item.id === connection.id)?.status).toBe("syncing");
@@ -900,10 +1158,7 @@ describe("Budgefi API with PostgreSQL", () => {
   it("accepts a manual sync when another worker already owns the durable job", async () => {
     const connected = bootstrapResponseSchema.parse((await connectPlaid()).json());
     const connection = connected.connections.find((item) => item.provider === "plaid")!;
-    await admin.query(
-      "insert into plaid_sync_jobs(id,household_id,connection_id,operation,trigger,state,available_at,locked_at) values($1,$2,$3,'sync','scheduled','running',now(),now())",
-      [uuidv7(), ids.householdA, connection.id],
-    );
+    await admin.query("insert into plaid_sync_jobs(id,household_id,connection_id,operation,trigger,state,available_at,locked_at) values($1,$2,$3,'sync','scheduled','running',now(),now())", [uuidv7(), ids.householdA, connection.id]);
     const accepted = await inject("POST", `/v1/plaid/connections/${connection.id}/sync`, {}, "dev|maya");
     expect(accepted.statusCode).toBe(201);
     expect(bootstrapResponseSchema.parse(accepted.json()).connections.find((item) => item.id === connection.id)?.status).toBe("syncing");
@@ -926,39 +1181,63 @@ describe("Budgefi API with PostgreSQL", () => {
     expect(link.json().hostedLinkUrl).toBe("https://secure.plaid.test/hosted-link");
     expect(fakePlaid.nativeCompletionUri).toContain("budgefi://open/plaid-complete?session_id=");
 
-    const mismatched = await inject("POST", "/v1/plaid/hosted-complete", {
-      sessionId: link.json().sessionId,
-      linkToken: "another-link-token",
-      requestId: uuidv7(),
-    }, "dev|maya");
+    const mismatched = await inject(
+      "POST",
+      "/v1/plaid/hosted-complete",
+      {
+        sessionId: link.json().sessionId,
+        linkToken: "another-link-token",
+        requestId: uuidv7(),
+      },
+      "dev|maya",
+    );
     expect(mismatched.statusCode).toBe(403);
 
-    const completed = await inject("POST", "/v1/plaid/hosted-complete", {
-      sessionId: link.json().sessionId,
-      linkToken: link.json().linkToken,
-      requestId: uuidv7(),
-    }, "dev|maya");
+    const completed = await inject(
+      "POST",
+      "/v1/plaid/hosted-complete",
+      {
+        sessionId: link.json().sessionId,
+        linkToken: link.json().linkToken,
+        requestId: uuidv7(),
+      },
+      "dev|maya",
+    );
     expect(completed.statusCode).toBe(201);
     expect(bootstrapResponseSchema.parse(completed.json()).connections.find((item) => item.provider === "plaid")?.institutionName).toBe("First Platypus Bank");
   });
 
   function inject(method: "GET" | "POST" | "PUT", url: string, payload: unknown, subject: string, householdId?: string) {
-    return app.inject({ method, url, ...(payload === undefined ? {} : { payload: payload as object }), headers: { "x-dev-auth-subject": subject, ...(householdId ? { "x-household-id": householdId } : {}) } });
+    return app.inject({
+      method,
+      url,
+      ...(payload === undefined ? {} : { payload: payload as object }),
+      headers: {
+        "x-dev-auth-subject": subject,
+        ...(householdId ? { "x-household-id": householdId } : {}),
+      },
+    });
   }
 
   async function connectPlaid() {
     const link = await inject("POST", "/v1/plaid/link-token", { mode: "create" }, "dev|maya");
-    const exchanged = await inject("POST", "/v1/plaid/exchange", { sessionId: link.json().sessionId, publicToken: "public-sandbox-token", requestId: uuidv7() }, "dev|maya");
+    const exchanged = await inject(
+      "POST",
+      "/v1/plaid/exchange",
+      {
+        sessionId: link.json().sessionId,
+        publicToken: "public-sandbox-token",
+        requestId: uuidv7(),
+      },
+      "dev|maya",
+    );
     const connection = bootstrapResponseSchema.parse(exchanged.json()).connections.find((item) => item.provider === "plaid")!;
     expect(await processQueued(connection.id)).toBe(true);
     return inject("GET", "/v1/bootstrap", undefined, "dev|maya");
   }
 
   async function processQueued(connectionId: string, operation: "sync" | "revoke" = "sync") {
-    const job = await admin.query<{ id: string }>(
-      "select id from plaid_sync_jobs where connection_id=$1 and operation=$2 and state='queued' order by created_at limit 1",
-      [connectionId, operation],
-    );
+    const job = await admin.query<{ id: string }>("select id from plaid_sync_jobs where connection_id=$1 and operation=$2 and state='queued' order by created_at limit 1", [connectionId, operation]);
     expect(job.rows[0]?.id).toBeTruthy();
     return app.get(PlaidService).processJob(job.rows[0]!.id, ids.householdA);
   }
@@ -981,7 +1260,12 @@ class FakePlaidGateway {
   constructor() {
     const pair = generateKeyPairSync("ec", { namedCurve: "P-256" });
     this.privateKey = pair.privateKey;
-    this.publicJwk = { ...(pair.publicKey.export({ format: "jwk" }) as JWK), kid: "test-plaid-key", alg: "ES256", use: "sig" };
+    this.publicJwk = {
+      ...(pair.publicKey.export({ format: "jwk" }) as JWK),
+      kid: "test-plaid-key",
+      alg: "ES256",
+      use: "sig",
+    };
     this.reset();
   }
 
@@ -996,26 +1280,71 @@ class FakePlaidGateway {
     this.nativeCompletionUri = null;
     this.linkCalls = 0;
     this.uniqueItems = false;
-    this.pages.set("<initial>", syncPage({ added: [plaidTransaction({})], nextCursor: "cursor-initial", updateStatus: "INITIAL_UPDATE_COMPLETE" }));
+    this.pages.set(
+      "<initial>",
+      syncPage({
+        added: [plaidTransaction({})],
+        nextCursor: "cursor-initial",
+        updateStatus: "INITIAL_UPDATE_COMPLETE",
+      }),
+    );
   }
 
-  async createLinkToken(input?: { nativeCompletionUri?: string }): Promise<{ linkToken: string; expiration: string; requestId: string; hostedLinkUrl?: string }> {
+  async createLinkToken(input?: { nativeCompletionUri?: string }): Promise<{
+    linkToken: string;
+    expiration: string;
+    requestId: string;
+    hostedLinkUrl?: string;
+  }> {
     this.linkCalls += 1;
     this.nativeCompletionUri = input?.nativeCompletionUri ?? null;
-    return { linkToken: `link-sandbox-token-${this.linkCalls}`, expiration: new Date(Date.now() + 30 * 60_000).toISOString(), requestId: "link-request", ...(input?.nativeCompletionUri ? { hostedLinkUrl: "https://secure.plaid.test/hosted-link" } : {}) };
+    return {
+      linkToken: `link-sandbox-token-${this.linkCalls}`,
+      expiration: new Date(Date.now() + 30 * 60_000).toISOString(),
+      requestId: "link-request",
+      ...(input?.nativeCompletionUri ? { hostedLinkUrl: "https://secure.plaid.test/hosted-link" } : {}),
+    };
   }
-  async getHostedCompletion(): Promise<{ state: "success"; linkSessionId: string; publicToken: string; institution: { id: string; name: string } }> {
-    return { state: "success", linkSessionId: "hosted-link-session", publicToken: "public-hosted-token", institution: { id: "ins_109508", name: "First Platypus Bank" } };
+  async getHostedCompletion(): Promise<{
+    state: "success";
+    linkSessionId: string;
+    publicToken: string;
+    institution: { id: string; name: string };
+  }> {
+    return {
+      state: "success",
+      linkSessionId: "hosted-link-session",
+      publicToken: "public-hosted-token",
+      institution: { id: "ins_109508", name: "First Platypus Bank" },
+    };
   }
-  async exchangePublicToken(): Promise<{ accessToken: string; itemId: string; requestId: string }> {
+  async exchangePublicToken(): Promise<{
+    accessToken: string;
+    itemId: string;
+    requestId: string;
+  }> {
     this.exchangeCalls += 1;
     const suffix = this.uniqueItems ? `-${this.exchangeCalls}` : "";
-    return { accessToken: `access-sandbox-token${suffix}`, itemId: `item-sandbox${suffix}`, requestId: "exchange-request" };
+    return {
+      accessToken: `access-sandbox-token${suffix}`,
+      itemId: `item-sandbox${suffix}`,
+      requestId: "exchange-request",
+    };
   }
-  async getAccounts(): Promise<{ accounts: AccountBase[]; institutionId: string; requestId: string }> {
-    return { accounts: [plaidAccount()], institutionId: "ins_109508", requestId: "accounts-request" };
+  async getAccounts(): Promise<{
+    accounts: AccountBase[];
+    institutionId: string;
+    requestId: string;
+  }> {
+    return {
+      accounts: [plaidAccount()],
+      institutionId: "ins_109508",
+      requestId: "accounts-request",
+    };
   }
-  async getInstitutionName(): Promise<string> { return "First Platypus Bank"; }
+  async getInstitutionName(): Promise<string> {
+    return "First Platypus Bank";
+  }
   async syncTransactions(_token: string, cursor: string | null): Promise<PlaidSyncPage> {
     this.syncCallCursors.push(cursor ?? "<initial>");
     if (cursor === "page-2" && this.mutationFailuresRemaining > 0) {
@@ -1026,38 +1355,143 @@ class FakePlaidGateway {
     if (!page) throw new PlaidRequestError("MISSING_FAKE_PAGE", null, false);
     return page;
   }
-  async removeItem(token: string): Promise<{ requestId: string }> { if (this.removeFailuresRemaining > 0) { this.removeFailuresRemaining -= 1; throw new PlaidRequestError("INSTITUTION_DOWN", "remove-failure", true); } if (this.alreadyRemovedOnNext) { this.alreadyRemovedOnNext = false; throw new PlaidRequestError("ITEM_NOT_FOUND", "already-removed", false); } this.removedTokens.push(token); return { requestId: "remove-request" }; }
-  async getWebhookVerificationKey(): Promise<Record<string, unknown>> { return this.publicJwk as Record<string, unknown>; }
+  async removeItem(token: string): Promise<{ requestId: string }> {
+    if (this.removeFailuresRemaining > 0) {
+      this.removeFailuresRemaining -= 1;
+      throw new PlaidRequestError("INSTITUTION_DOWN", "remove-failure", true);
+    }
+    if (this.alreadyRemovedOnNext) {
+      this.alreadyRemovedOnNext = false;
+      throw new PlaidRequestError("ITEM_NOT_FOUND", "already-removed", false);
+    }
+    this.removedTokens.push(token);
+    return { requestId: "remove-request" };
+  }
+  async getWebhookVerificationKey(): Promise<Record<string, unknown>> {
+    return this.publicJwk as Record<string, unknown>;
+  }
   async signWebhook(body: string, issuedAt?: number): Promise<string> {
-    return new SignJWT({ request_body_sha256: createHash("sha256").update(body).digest("hex") }).setProtectedHeader({ alg: "ES256", kid: "test-plaid-key" }).setIssuedAt(issuedAt).sign(this.privateKey);
+    return new SignJWT({
+      request_body_sha256: createHash("sha256").update(body).digest("hex"),
+    })
+      .setProtectedHeader({ alg: "ES256", kid: "test-plaid-key" })
+      .setIssuedAt(issuedAt)
+      .sign(this.privateKey);
   }
 }
 
 function plaidAccount(): AccountBase {
-  return { account_id: "plaid-checking", balances: { available: 1200.34, current: 1200.34, limit: null, iso_currency_code: "USD", unofficial_currency_code: null }, mask: "1234", name: "Everyday checking", official_name: "Everyday Checking", persistent_account_id: "persistent-checking", type: "depository", subtype: "checking", verification_status: null } as unknown as AccountBase;
+  return {
+    account_id: "plaid-checking",
+    balances: {
+      available: 1200.34,
+      current: 1200.34,
+      limit: null,
+      iso_currency_code: "USD",
+      unofficial_currency_code: null,
+    },
+    mask: "1234",
+    name: "Everyday checking",
+    official_name: "Everyday Checking",
+    persistent_account_id: "persistent-checking",
+    type: "depository",
+    subtype: "checking",
+    verification_status: null,
+  } as unknown as AccountBase;
 }
 
 function plaidTransaction(overrides: Partial<Transaction>): Transaction {
-  return { account_id: "plaid-checking", account_owner: null, amount: 8.25, authorized_date: "2026-08-31", authorized_datetime: null, category: null, category_id: null, check_number: null, counterparties: [], date: "2026-08-31", datetime: null, iso_currency_code: "USD", location: { address: null, city: null, region: null, postal_code: null, country: null, lat: null, lon: null, store_number: null }, logo_url: null, merchant_entity_id: null, merchant_name: "Coffee Lab", name: "Coffee Lab", original_description: null, payment_channel: "in store", payment_meta: { by_order_of: null, payee: null, payer: null, payment_method: null, payment_processor: null, ppd_id: null, reason: null, reference_number: null }, pending: true, pending_transaction_id: null, personal_finance_category: null, personal_finance_category_icon_url: null, transaction_code: null, transaction_id: "pending-coffee", website: null, ...overrides } as Transaction;
+  return {
+    account_id: "plaid-checking",
+    account_owner: null,
+    amount: 8.25,
+    authorized_date: "2026-08-31",
+    authorized_datetime: null,
+    category: null,
+    category_id: null,
+    check_number: null,
+    counterparties: [],
+    date: "2026-08-31",
+    datetime: null,
+    iso_currency_code: "USD",
+    location: {
+      address: null,
+      city: null,
+      region: null,
+      postal_code: null,
+      country: null,
+      lat: null,
+      lon: null,
+      store_number: null,
+    },
+    logo_url: null,
+    merchant_entity_id: null,
+    merchant_name: "Coffee Lab",
+    name: "Coffee Lab",
+    original_description: null,
+    payment_channel: "in store",
+    payment_meta: {
+      by_order_of: null,
+      payee: null,
+      payer: null,
+      payment_method: null,
+      payment_processor: null,
+      ppd_id: null,
+      reason: null,
+      reference_number: null,
+    },
+    pending: true,
+    pending_transaction_id: null,
+    personal_finance_category: null,
+    personal_finance_category_icon_url: null,
+    transaction_code: null,
+    transaction_id: "pending-coffee",
+    website: null,
+    ...overrides,
+  } as Transaction;
 }
 
 function syncPage(overrides: Partial<PlaidSyncPage>): PlaidSyncPage {
-  return { added: [], modified: [], removed: [], nextCursor: "cursor", hasMore: false, updateStatus: "INITIAL_UPDATE_COMPLETE", requestId: `request-${uuidv7()}`, ...overrides };
+  return {
+    added: [],
+    modified: [],
+    removed: [],
+    nextCursor: "cursor",
+    hasMore: false,
+    updateStatus: "INITIAL_UPDATE_COMPLETE",
+    requestId: `request-${uuidv7()}`,
+    ...overrides,
+  };
 }
 
 async function resetFixture(client: pg.Client): Promise<void> {
   await client.query("TRUNCATE case_evidence, exception_cases, sync_runs, webhook_receipts, connections, idempotency_records, activity_events, calculation_snapshots, financial_transactions, balance_observations, commitments, plans, accounts, household_memberships, households, users RESTART IDENTITY CASCADE");
-  for (const [userId, subject, name] of [[ids.userA, "dev|maya", "Maya"], [ids.userB, "dev|riley", "Riley"]]) await client.query("INSERT INTO users (id, auth_subject, display_name) VALUES ($1, $2, $3)", [userId, subject, name]);
-  for (const [householdId, userId, name] of [[ids.householdA, ids.userA, "Maya household"], [ids.householdB, ids.userB, "Riley household"]]) {
+  for (const [userId, subject, name] of [
+    [ids.userA, "dev|maya", "Maya"],
+    [ids.userB, "dev|riley", "Riley"],
+  ])
+    await client.query("INSERT INTO users (id, auth_subject, display_name) VALUES ($1, $2, $3)", [userId, subject, name]);
+  for (const [householdId, userId, name] of [
+    [ids.householdA, ids.userA, "Maya household"],
+    [ids.householdB, ids.userB, "Riley household"],
+  ]) {
     await client.query("INSERT INTO households (id, name, timezone, base_currency) VALUES ($1, $2, 'America/New_York', 'USD')", [householdId, name]);
     await client.query("INSERT INTO household_memberships (household_id, user_id, role, onboarding_completed_at) VALUES ($1, $2, 'owner', now())", [householdId, userId]);
   }
-  for (const [accountId, householdId, amount] of [[ids.accountA, ids.householdA, "423039"], [ids.accountB, ids.householdB, "100000"]]) {
+  for (const [accountId, householdId, amount] of [
+    [ids.accountA, ids.householdA, "423039"],
+    [ids.accountB, ids.householdB, "100000"],
+  ]) {
     await client.query("INSERT INTO accounts (id, household_id, name, account_type, currency, provenance, include_in_plan) VALUES ($1, $2, 'Manual cash', 'cash', 'USD', 'manual', true)", [accountId, householdId]);
     await client.query("INSERT INTO balance_observations (household_id, account_id, amount_minor, currency, provenance, as_of, source_record_id) VALUES ($1, $2, $3, 'USD', 'manual', '2026-08-29T12:00:00Z', 'fixture-v1')", [householdId, accountId, amount]);
   }
   await client.query("INSERT INTO plans (id, household_id, planned_savings_minor, safety_buffer_minor, currency, calculation_policy_version) VALUES ($1, $2, 50000, 28000, 'USD', 'safe-to-spend/v1'), ($3, $4, 0, 0, 'USD', 'safe-to-spend/v1')", [ids.planA, ids.householdA, ids.planB, ids.householdB]);
-  const commitments = [["Rent", "185000", "2026-09-01"], ["Electric", "15500", "2026-09-04"], ["Subscriptions", "1899", "2026-09-06"], ["Insurance", "14240", "2026-09-08"]];
+  const commitments = [
+    ["Rent", "185000", "2026-09-01"],
+    ["Electric", "15500", "2026-09-04"],
+    ["Subscriptions", "1899", "2026-09-06"],
+    ["Insurance", "14240", "2026-09-08"],
+  ];
   for (const [name, amount, dueDate] of commitments) await client.query("INSERT INTO commitments (household_id, name, amount_minor, currency, due_date, provenance) VALUES ($1, $2, $3, 'USD', $4, 'manual')", [ids.householdA, name, amount, dueDate]);
 }
 

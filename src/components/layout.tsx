@@ -58,7 +58,7 @@ export function MobileShell({ children }: { children: React.ReactNode }) {
         <div
           className={cn(
             detail ? "pb-6" : "safe-bottom",
-            nativeRoot && "native-root-content"
+            nativeRoot && "native-root-content",
           )}
           aria-busy={state.backendStatus === "loading"}
         >
@@ -220,8 +220,7 @@ function OfflineNotice({
 function TopBar({ detail }: { detail: boolean }) {
   const navg = useNavigate();
   const loc = useLocation();
-  const { sourceStale, dataMode, backendStatus, householdMode, workspaceName } =
-    useAppState();
+  const { sourceStale, dataMode, backendStatus, workspaceName } = useAppState();
   const manual = dataMode === "manual";
   const fallback = locationFallback(loc.pathname);
   const nativeTitle = nativeDetailTitle(loc.pathname);
@@ -229,7 +228,7 @@ function TopBar({ detail }: { detail: boolean }) {
     <header
       className={cn(
         "sticky top-0 z-30 flex h-16 items-center gap-2 border-b border-rule/80 bg-paper/95 px-4 backdrop-blur-sm",
-        isNativeApp && "native-detail-header"
+        isNativeApp && "native-detail-header",
       )}
     >
       {detail ? (
@@ -238,8 +237,8 @@ function TopBar({ detail }: { detail: boolean }) {
             isNativeApp
               ? navg(fallback, { replace: true })
               : window.history.length > 1
-              ? navg(-1)
-              : navg(fallback, { replace: true })
+                ? navg(-1)
+                : navg(fallback, { replace: true })
           }
           className="grid size-11 shrink-0 place-items-center rounded-xl border border-transparent hover:bg-recessed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pencil"
           aria-label="Back"
@@ -261,10 +260,7 @@ function TopBar({ detail }: { detail: boolean }) {
           {clerkConfigured ? (
             <AccountMenu />
           ) : (
-            <WorkspaceControl
-              workspaceName={workspaceName}
-              householdMode={householdMode}
-            />
+            <WorkspaceControl workspaceName={workspaceName} />
           )}
           <HealthSheet>
             <button
@@ -272,25 +268,25 @@ function TopBar({ detail }: { detail: boolean }) {
                 "flex h-11 min-w-[82px] shrink-0 items-center justify-center gap-2 rounded-xl border px-2.5 text-[13px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pencil",
                 backendStatus === "unavailable" || (sourceStale && !manual)
                   ? "border-coral/35 bg-sheet text-carbon"
-                  : "border-leaf/25 bg-sheet text-leaf"
+                  : "border-leaf/25 bg-sheet text-leaf",
               )}
             >
               <MissingSourceIcon
                 className={cn(
                   "size-4",
-                  backendStatus === "loading" && "animate-pulse"
+                  backendStatus === "loading" && "animate-pulse",
                 )}
               />
               <span>
                 {backendStatus === "loading"
                   ? "Loading"
                   : backendStatus === "unavailable"
-                  ? "Offline"
-                  : manual
-                  ? "Manual"
-                  : sourceStale
-                  ? "Review"
-                  : "Current"}
+                    ? "Offline"
+                    : manual
+                      ? "Manual"
+                      : sourceStale
+                        ? "Review"
+                        : "Current"}
               </span>
             </button>
           </HealthSheet>
@@ -300,13 +296,7 @@ function TopBar({ detail }: { detail: boolean }) {
   );
 }
 
-function WorkspaceControl({
-  workspaceName,
-  householdMode,
-}: {
-  workspaceName: string;
-  householdMode: "solo" | "shared";
-}) {
+function WorkspaceControl({ workspaceName }: { workspaceName: string }) {
   const initials =
     workspaceName
       .split(/\s+/)
@@ -335,13 +325,11 @@ function WorkspaceControl({
           </div>
         </div>
         <div className="mt-3 rounded-xl bg-recessed p-3 text-xs leading-5 text-muted">
-          {householdMode === "shared"
-            ? "Household language is selected. Member invitations are not available yet."
-            : "This plan currently has one decision-maker."}
+          This is your private personal plan. Shared access is not enabled.
         </div>
         <SheetClose asChild>
           <Button asChild variant="secondary" className="mt-4 w-full">
-            <Link to="/settings/household">Household settings</Link>
+            <Link to="/settings">Open settings</Link>
           </Button>
         </SheetClose>
       </SheetContent>
@@ -361,7 +349,7 @@ export function HealthSheet({ children }: { children: React.ReactNode }) {
   const [checking, setChecking] = useState(false);
   const manual = dataMode === "manual";
   const shown = accounts.filter((account) =>
-    manual ? account.provenance === "manual" : account.provenance !== "manual"
+    manual ? account.provenance === "manual" : account.provenance !== "manual",
   );
   return (
     <Sheet>
@@ -372,10 +360,10 @@ export function HealthSheet({ children }: { children: React.ReactNode }) {
           backendStatus === "unavailable"
             ? "Budgefi cannot confirm that your data is current."
             : manual
-            ? "This plan uses values maintained by you."
-            : sourceStale
-            ? "At least one included account is stale or missing a balance."
-            : "Every included account has current coverage."
+              ? "This plan uses values maintained by you."
+              : sourceStale
+                ? "At least one included account is stale or missing a balance."
+                : "Every included account has current coverage."
         }
       >
         <div className="space-y-2">
@@ -392,7 +380,7 @@ export function HealthSheet({ children }: { children: React.ReactNode }) {
                         day: "numeric",
                         hour: "numeric",
                         minute: "2-digit",
-                      }
+                      },
                     )}`
                   : "No balance observation"
               }
@@ -400,8 +388,8 @@ export function HealthSheet({ children }: { children: React.ReactNode }) {
                 account.includeInPlan
                   ? "Included in observed cash"
                   : account.type === "credit"
-                  ? "Activity only"
-                  : "Protected from plan"
+                    ? "Activity only"
+                    : "Protected from plan"
               }
               stale={
                 account.coverage === "stale" || account.coverage === "missing"
@@ -475,7 +463,7 @@ function SourceRow({
       <span
         className={cn(
           "grid size-10 shrink-0 place-items-center rounded-lg",
-          stale ? "bg-coral/8 text-coral" : "bg-pencil/8 text-pencil"
+          stale ? "bg-coral/8 text-coral" : "bg-pencil/8 text-pencil",
         )}
       >
         {stale ? (
@@ -509,7 +497,7 @@ function BottomNav() {
           className={({ isActive }) =>
             cn(
               "relative flex min-w-0 flex-col items-center justify-center gap-1 text-[11.5px] font-semibold text-carbon/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-pencil",
-              isActive && "text-pencil"
+              isActive && "text-pencil",
             )
           }
           children={({ isActive }) => (
@@ -517,7 +505,7 @@ function BottomNav() {
               <span
                 className={cn(
                   "relative grid size-11 place-items-center rounded-xl transition-colors",
-                  isActive && "bg-citron"
+                  isActive && "bg-citron",
                 )}
               >
                 <Icon className="size-6" strokeWidth={1.9} />

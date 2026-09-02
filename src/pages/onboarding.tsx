@@ -146,17 +146,29 @@ export function OnboardingPage() {
   const [params] = useSearchParams();
   const fromSignUp = params.get("from") === "signup";
   const state = useAppState();
+  const householdModeEnabled = state.features.householdMode;
+  const onboardingAiEnabled = state.features.onboardingAi;
+  const activeSteps = steps
+    .map((label, index) => ({ label, index }))
+    .filter(({ index }) => householdModeEnabled || index !== 1);
+  const visibleSteps = fromSignUp
+    ? activeSteps.filter(({ index }) => index !== 0)
+    : activeSteps;
   const plaidConnection = state.connections.find(
     (connection) =>
       connection.provider === "plaid" &&
       connection.status !== "revoked" &&
       connection.status !== "revocation_pending",
   );
-  const [step, setStep] = useState(fromSignUp ? 1 : 0);
+  const [step, setStep] = useState(
+    fromSignUp ? (householdModeEnabled ? 1 : 2) : 0,
+  );
   const [connectionPhase, setConnectionPhase] = useState<
     "choose" | "done" | "error"
   >("choose");
-  const [householdDraft, setHouseholdDraft] = useState(state.householdMode);
+  const [householdDraft, setHouseholdDraft] = useState<HouseholdMode>(
+    householdModeEnabled ? state.householdMode : "solo",
+  );
   const [notificationDraft, setNotificationDraft] = useState(
     state.notificationMode,
   );
@@ -176,8 +188,10 @@ export function OnboardingPage() {
   const [draftStorageKey, setDraftStorageKey] = useState<string | null>(null);
   const [draftScope, setDraftScope] = useState<string | null>(null);
   const [alertMessage, setAlertMessage] = useState("");
-  const visibleSteps = fromSignUp ? steps.slice(1) : steps;
-  const visibleStep = fromSignUp ? step - 1 : step;
+  const visibleStep = Math.max(
+    0,
+    visibleSteps.findIndex(({ index }) => index === step),
+  );
   const capturePlanDraft = useCallback(
     (data: PlanCalibrationData, buffer: number) =>
       setPlanDraft({ data, buffer }),
@@ -213,9 +227,9 @@ export function OnboardingPage() {
           return;
         }
         const value = parsed.draft;
-        setStep(value.step);
+        setStep(!householdModeEnabled && value.step === 1 ? 2 : value.step);
         setConnectionPhase(value.connectionPhase);
-        setHouseholdDraft(value.householdDraft);
+        setHouseholdDraft(householdModeEnabled ? value.householdDraft : "solo");
         setNotificationDraft(value.notificationDraft);
         setDigestDraft(value.digestDraft);
         setConnectionDraft(value.connectionDraft);
@@ -233,7 +247,13 @@ export function OnboardingPage() {
         else sessionStorage.removeItem(legacyOnboardingStorageKey);
         setDraftReady(true);
       });
-  }, [draftReady, state.backendStatus, state.householdId, state.revision]);
+  }, [
+    draftReady,
+    householdModeEnabled,
+    state.backendStatus,
+    state.householdId,
+    state.revision,
+  ]);
   useEffect(() => {
     if (
       state.backendStatus !== "connected" ||
@@ -300,7 +320,11 @@ export function OnboardingPage() {
     connectionPhase,
   ]);
 
-  const next = () => setStep((value) => Math.min(5, value + 1));
+  const next = () =>
+    setStep((value) => {
+      const nextStep = activeSteps.find(({ index }) => index > value);
+      return nextStep?.index ?? value;
+    });
   const back = () => {
     if (
       step === 2 &&
@@ -308,8 +332,14 @@ export function OnboardingPage() {
       connectionPhase !== "done"
     )
       setConnectionPhase("choose");
-    else if (step === 1 && fromSignUp) navigate("/sign-up");
-    else setStep((value) => Math.max(0, value - 1));
+    else {
+      const previous = [...activeSteps]
+        .reverse()
+        .find(({ index }) => index < step);
+      if (fromSignUp && (!previous || previous.index === 0))
+        navigate("/sign-up");
+      else if (previous) setStep(previous.index);
+    }
   };
   const chooseManual = async () => {
     if (!(await state.activateManualMode())) {
@@ -328,6 +358,11 @@ export function OnboardingPage() {
   };
   const preparePlan = async () => {
     if (analyzing) return;
+    if (!onboardingAiEnabled) {
+      setAnalysis(null);
+      next();
+      return;
+    }
     setAnalyzing(true);
     try {
       const result = await api.analyzeOnboarding();
@@ -362,7 +397,7 @@ export function OnboardingPage() {
     }
   };
   const finish = async () => {
-    state.setHouseholdMode(householdDraft);
+    state.setHouseholdMode(householdModeEnabled ? householdDraft : "solo");
     state.setNotificationMode(notificationDraft);
     state.setWeeklyDigest(digestDraft);
     if (!connectionDraft) state.setDataMode(dataModeDraft);
@@ -459,15 +494,15 @@ export function OnboardingPage() {
         {step !== 3 && (
           <div className="px-5 pt-4">
             <div
-              className={cn(
-                "grid gap-1.5",
-                fromSignUp ? "grid-cols-5" : "grid-cols-6",
-              )}
+              className={cn("grid gap-1.5", "grid")}
+              style={{
+                gridTemplateColumns: `repeat(${visibleSteps.length}, minmax(0, 1fr))`,
+              }}
               aria-label={`Onboarding step ${visibleStep + 1} of ${
                 visibleSteps.length
               }`}
             >
-              {visibleSteps.map((label, index) => (
+              {visibleSteps.map(({ label }, index) => (
                 <span
                   key={label}
                   className={cn(
@@ -485,7 +520,7 @@ export function OnboardingPage() {
 
         <main className="flex flex-1 flex-col px-5 pb-[calc(24px+env(safe-area-inset-bottom))] pt-5">
           {step === 0 && <Welcome onNext={next} />}
-          {step === 1 && (
+          {step === 1 && householdModeEnabled && (
             <Household
               value={householdDraft}
               onChange={setHouseholdDraft}
@@ -496,6 +531,7 @@ export function OnboardingPage() {
             <Connection
               phase={connectionPhase}
               setPhase={setConnectionPhase}
+              analysisEnabled={onboardingAiEnabled}
               onAnalyze={preparePlan}
               analyzing={analyzing}
               onSkipAnalysis={() => {
@@ -644,6 +680,7 @@ function Household({
 function Connection({
   phase,
   setPhase,
+  analysisEnabled,
   onAnalyze,
   analyzing,
   onSkipAnalysis,
@@ -655,6 +692,7 @@ function Connection({
 }: {
   phase: "choose" | "done" | "error";
   setPhase: (phase: "choose" | "done" | "error") => void;
+  analysisEnabled: boolean;
   onAnalyze: () => Promise<void>;
   analyzing: boolean;
   onSkipAnalysis: () => void;
@@ -750,28 +788,36 @@ function Connection({
             )}
           </div>
         )}
-        <div className="mt-5 rounded-2xl border border-pencil/15 bg-pencil/[.035] p-4">
-          <div className="flex items-start gap-3">
-            <span className="grid size-10 shrink-0 place-items-center rounded-2xl bg-citron text-ink">
-              <Sparkles className="size-5" />
-            </span>
-            <span>
-              <strong className="block text-sm">Prepare the first draft</strong>
-              <span className="mt-1 block text-xs leading-5 text-muted">
-                Budgefi can use recurring merchant labels, dates, and amounts to
-                suggest income, bills, and savings. Account numbers, balances,
-                credentials, and transaction IDs are not sent for
-                classification.
+        {analysisEnabled && (
+          <div className="mt-5 rounded-2xl border border-pencil/15 bg-pencil/[.035] p-4">
+            <div className="flex items-start gap-3">
+              <span className="grid size-10 shrink-0 place-items-center rounded-2xl bg-citron text-ink">
+                <Sparkles className="size-5" />
               </span>
-            </span>
+              <span>
+                <strong className="block text-sm">
+                  Prepare the first draft
+                </strong>
+                <span className="mt-1 block text-xs leading-5 text-muted">
+                  Budgefi can use recurring merchant labels, dates, and amounts
+                  to suggest income, bills, and savings. Account numbers,
+                  balances, credentials, and transaction IDs are not sent for
+                  classification.
+                </span>
+              </span>
+            </div>
+            <p className="mt-3 text-[11px] leading-4 text-muted">
+              Suggestions stay editable and do not join your plan until you
+              approve the final review.
+            </p>
           </div>
-          <p className="mt-3 text-[11px] leading-4 text-muted">
-            Suggestions stay editable and do not join your plan until you
-            approve the final review.
-          </p>
-        </div>
+        )}
         <div className="mt-auto space-y-2 pt-5">
-          {realConnection?.initialUpdateComplete ? (
+          {!analysisEnabled ? (
+            <Button onClick={onSkipAnalysis} size="lg" className="w-full">
+              Review accounts and plan <ChevronRight className="size-4" />
+            </Button>
+          ) : realConnection?.initialUpdateComplete ? (
             <>
               <Button
                 onClick={() => void onAnalyze()}

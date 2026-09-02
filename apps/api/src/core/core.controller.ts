@@ -21,6 +21,7 @@ import {
 import type { AuthenticatedRequest } from "../auth/request-auth.js";
 import { parseBody } from "../http/zod.js";
 import { CoreService } from "./core.service.js";
+import { getFeatureFlags } from "../config/feature-flags.js";
 
 @Controller()
 export class CoreController {
@@ -29,6 +30,11 @@ export class CoreController {
   @Get("bootstrap")
   bootstrap(@Req() request: AuthenticatedRequest) {
     return this.core.getBootstrap(request.identity);
+  }
+
+  @Get("features")
+  features() {
+    return getFeatureFlags();
   }
 
   @Post("onboarding/complete")
@@ -107,5 +113,4 @@ export class CoreController {
       parseBody(exceptionDecisionRequestSchema, body),
     );
   }
-
 }
