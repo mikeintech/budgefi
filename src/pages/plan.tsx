@@ -51,7 +51,7 @@ export function PlanPage() {
 
         <section className="mt-7 rounded-[24px] bg-ink p-5 text-white">
           <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[.12em] text-citron">Unallocated cash</p><h2 className="mt-1 text-2xl font-bold tracking-[-0.035em]">{available<0?'Paused for shortfall':money(unallocatedCash)}</h2></div><ShoppingBag className="size-6 text-citron" strokeWidth={1.8} /></div>
-          <p className="mt-5 text-xs leading-5 text-white/65">This is the server-calculated amount left after commitments, planned savings, and your safety buffer. Budgefi is not setting a category cap here.</p>
+          <p className="mt-5 text-xs leading-5 text-white/65">This is the server-calculated amount left after commitments, planned savings, and the cash you chose to keep untouched. Budgefi is not setting a category cap here.</p>
         </section>
       </main>
     </MobileShell>

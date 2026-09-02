@@ -63,7 +63,7 @@ const sections = [
     slug: "planning",
     icon: SlidersHorizontal,
     title: "Plan rules",
-    detail: "Safety buffer and forecast behavior",
+    detail: "Untouched cash and forecast behavior",
   },
   {
     slug: "notifications",
@@ -269,10 +269,10 @@ function PlanningSettings() {
         className="mt-6 block text-sm font-semibold"
         htmlFor="planning-buffer"
       >
-        Safety buffer
+        Keep untouched
       </label>
       <p className="mt-1 text-xs text-muted">
-        Held back from available-to-use for surprises.
+        Cash Budgefi excludes from safe-to-spend for surprises.
       </p>
       <div className="mt-3 flex h-14 items-center rounded-2xl border border-rule bg-white px-4 focus-within:ring-2 focus-within:ring-pencil">
         <span className="text-lg font-semibold text-muted">$</span>

@@ -96,7 +96,7 @@ await inspect("privacy");
 await capture("15-privacy");
 await page.getByRole("button", { name: "Back" }).click();
 await page.getByRole("link", { name: /Planning rules/ }).click();
-const buffer = page.getByLabel("Safety buffer");
+const buffer = page.getByLabel("Keep untouched");
 await buffer.fill("350");
 await capture("16-planning-consequence");
 await page.getByRole("button", { name: /Save planning rule/ }).click();

@@ -161,6 +161,8 @@ try {
   await page
     .getByRole("heading", { name: "What should stay protected?" })
     .waitFor();
+  await page.getByLabel("Keep untouched").waitFor();
+  await page.getByText(/^Safe to spend through /).waitFor();
   await page.getByRole("button", { name: "Use this plan" }).click();
   await page.getByRole("button", { name: "Save and continue" }).click();
   await page.getByRole("button", { name: "Save plan and open Today" }).click();

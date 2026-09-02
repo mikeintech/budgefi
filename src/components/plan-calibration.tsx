@@ -992,8 +992,8 @@ function Guardrails({
         What should stay protected?
       </h1>
       <p className="mt-2 text-sm leading-5 text-muted">
-        Savings is reserved now for this horizon, not shown as a completed
-        transfer. The buffer remains untouched for surprises.
+        Planned savings is set aside for this plan. Keep untouched is cash you
+        do not want Budgefi to count as spendable.
       </p>
       <div className="mt-5 grid grid-cols-1 gap-3 min-[370px]:grid-cols-2">
         <Field label="Planned savings">
@@ -1004,7 +1004,7 @@ function Guardrails({
             }
           />
         </Field>
-        <Field label="Safety buffer">
+        <Field label="Keep untouched">
           <MoneyInput value={buffer} onChange={setBuffer} />
         </Field>
       </div>
@@ -1015,7 +1015,7 @@ function Guardrails({
               ? "Projected shortfall"
               : stale
                 ? "Partial-data preview"
-                : "Available to use"}
+                : `Safe to spend through ${formatCalibrationDate(authoritativeProjection.horizonEnd)}`}
           </p>
           {stale && (
             <span className="rounded-full bg-white/10 px-2 py-1 text-[9px] font-bold uppercase tracking-[.08em]">
@@ -1043,11 +1043,10 @@ function Guardrails({
             label="Planned savings"
             value={-draft.savingsContribution}
           />
-          <Equation label="Safety buffer" value={-buffer} />
+          <Equation label="Keep untouched" value={-buffer} />
         </div>
         <p className="mt-4 text-[11px] leading-5 text-white/55">
-          No future income counted. Preview runs through{" "}
-          {formatCalibrationDate(authoritativeProjection.horizonEnd)}.
+          No future income counted.
         </p>
       </div>
       {stale && (

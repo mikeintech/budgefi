@@ -575,7 +575,7 @@ function PlanEquation() {
     ["Observed cash", "$4,230.39"],
     ["Reviewed commitments", "−$2,166.39"],
     ["Planned savings", "−$500"],
-    ["Safety buffer", "−$280"],
+    ["Keep untouched", "−$280"],
   ];
   return (
     <div className="overflow-hidden rounded-[24px] border border-white/15 bg-white/[.06] p-5">
@@ -591,7 +591,7 @@ function PlanEquation() {
         $1,284
       </p>
       <p className="text-sm text-white/60">
-        Example available-to-use calculation
+        Example safe-to-spend calculation
       </p>
       <div className="mt-5 divide-y divide-white/10 border-t border-white/10">
         {rows.map(([label, value]) => (

@@ -1056,7 +1056,7 @@ function Ready({
             ? "the cash and bills you entered"
             : "included deposit accounts"}
           , {commitmentCount} reviewed commitments, no future income, planned
-          savings, and your safety buffer.
+          savings, and the cash you chose to keep untouched.
         </p>
       </div>
       <div className="mt-7 divide-y divide-rule overflow-hidden rounded-[20px] border border-rule bg-white">
