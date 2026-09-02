@@ -45,6 +45,7 @@ export interface AccountsTable {
   currency: string;
   provenance: string;
   provider_account_id: string | null;
+  provider_account_fingerprint: string | null;
   connection_id: string | null;
   include_in_plan: Generated<boolean>;
   version: Generated<number>;

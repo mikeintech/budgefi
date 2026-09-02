@@ -783,12 +783,14 @@ export class PlaidService implements OnModuleInit, OnModuleDestroy {
       // Accounts and balances are available independently from the Transactions
       // product. Preserve that verified observation even when transaction
       // history is still warming up or temporarily unavailable.
-      await this.persistAccountsWhileTransactionsWait(
+      const duplicateRetired = await this.persistAccountsWhileTransactionsWait(
         job,
+        syncRunId,
         secret.cursor,
         accounts,
         resolvedInstitutionName,
       );
+      if (duplicateRetired) return syncRunId;
       throw error;
     }
     const added = pages.flatMap((page) => page.added);
@@ -796,9 +798,12 @@ export class PlaidService implements OnModuleInit, OnModuleDestroy {
     const removed = pages.flatMap((page) => page.removed);
     const finalPage = pages.at(-1);
     if (!finalPage) throw new Error("Plaid synchronization returned no page");
-    await this.tenantDatabase.runSystemHousehold(
+    const duplicateRetired = await this.tenantDatabase.runSystemHousehold(
       job.householdId,
       async (transaction, principal) => {
+        await sql`select pg_advisory_xact_lock(hashtextextended(${job.householdId}, 7241))`.execute(
+          transaction,
+        );
         await sql`select pg_advisory_xact_lock(hashtextextended(${job.connectionId}, 0))`.execute(
           transaction,
         );
@@ -823,6 +828,16 @@ export class PlaidService implements OnModuleInit, OnModuleDestroy {
           throw new ConflictException(
             "Plaid cursor advanced in another sync; this batch will be retried",
           );
+        const duplicate = await resolveDuplicatePlaidItem(
+          transaction,
+          principal,
+          current,
+          accounts.accounts,
+          accounts.institutionId,
+          resolvedInstitutionName,
+          syncRunId,
+        );
+        if (duplicate.retireCurrent) return true;
         await reconcileAccounts(
           transaction,
           principal,
@@ -910,20 +925,26 @@ export class PlaidService implements OnModuleInit, OnModuleDestroy {
         );
         await persistSnapshot(transaction, principal);
         await bumpRevision(transaction, principal);
+        return false;
       },
     );
+    if (duplicateRetired) return syncRunId;
     return syncRunId;
   }
 
   private async persistAccountsWhileTransactionsWait(
     job: ClaimedJob,
+    syncRunId: string,
     expectedCursor: string | null,
     accounts: Awaited<ReturnType<PlaidGateway["getAccounts"]>>,
     resolvedInstitutionName: string | null,
-  ): Promise<void> {
-    await this.tenantDatabase.runSystemHousehold(
+  ): Promise<boolean> {
+    return this.tenantDatabase.runSystemHousehold(
       job.householdId,
       async (transaction, principal) => {
+        await sql`select pg_advisory_xact_lock(hashtextextended(${job.householdId}, 7241))`.execute(
+          transaction,
+        );
         await sql`select pg_advisory_xact_lock(hashtextextended(${job.connectionId}, 0))`.execute(
           transaction,
         );
@@ -948,6 +969,16 @@ export class PlaidService implements OnModuleInit, OnModuleDestroy {
           throw new ConflictException(
             "Plaid cursor advanced while account balances were being observed",
           );
+        const duplicate = await resolveDuplicatePlaidItem(
+          transaction,
+          principal,
+          current,
+          accounts.accounts,
+          accounts.institutionId,
+          resolvedInstitutionName,
+          syncRunId,
+        );
+        if (duplicate.retireCurrent) return true;
         const observedAt = new Date();
         await reconcileAccounts(
           transaction,
@@ -970,6 +1001,7 @@ export class PlaidService implements OnModuleInit, OnModuleDestroy {
           .execute();
         await persistSnapshot(transaction, principal);
         await bumpRevision(transaction, principal);
+        return false;
       },
     );
   }
@@ -1154,7 +1186,7 @@ export class PlaidService implements OnModuleInit, OnModuleDestroy {
           })
           .where("id", "=", job.jobId)
           .execute();
-        await transaction
+        let connectionUpdate = transaction
           .updateTable("connections")
           .set({
             status:
@@ -1167,8 +1199,14 @@ export class PlaidService implements OnModuleInit, OnModuleDestroy {
             updated_at: new Date(),
           })
           .where("id", "=", job.connectionId)
-          .where("status", "!=", "revoked")
-          .execute();
+          .where("status", "!=", "revoked");
+        if (job.operation === "sync")
+          connectionUpdate = connectionUpdate.where(
+            "status",
+            "!=",
+            "revocation_pending",
+          );
+        await connectionUpdate.execute();
         const receipt = await transaction
           .selectFrom("plaid_sync_jobs")
           .select("webhook_receipt_id")
@@ -1513,6 +1551,209 @@ async function requireActiveHousehold(
     );
 }
 
+async function resolveDuplicatePlaidItem(
+  transaction: DatabaseTransaction<Database>,
+  principal: Principal,
+  current: {
+    id: string;
+    household_id: string;
+    institution_id: string | null;
+    institution_name: string | null;
+    created_at: Date;
+    sync_cursor: string | null;
+    initial_update_complete: boolean;
+  },
+  providerAccounts: AccountBase[],
+  observedInstitutionId: string | null,
+  observedInstitutionName: string | null,
+  syncRunId: string,
+): Promise<{ retireCurrent: boolean }> {
+  // Duplicate resolution is intentionally limited to a new Item's first sync.
+  // A later account-set change at the same institution is normal provider data,
+  // not evidence that the user linked the bank twice.
+  if (
+    current.sync_cursor !== null ||
+    current.initial_update_complete ||
+    providerAccounts.length === 0
+  )
+    return { retireCurrent: false };
+
+  const institutionId = observedInstitutionId ?? current.institution_id;
+  const institutionName =
+    observedInstitutionName ?? current.institution_name;
+  let candidates = transaction
+    .selectFrom("connections")
+    .select([
+      "id",
+      "created_at",
+      "institution_id",
+      "institution_name",
+      "status",
+    ])
+    .where("household_id", "=", principal.householdId)
+    .where("provider", "=", "plaid")
+    .where("id", "!=", current.id)
+    .where("status", "in", ["syncing", "healthy"]);
+  if (institutionId)
+    candidates = candidates.where("institution_id", "=", institutionId);
+  else if (institutionName)
+    candidates = candidates.where(
+      sql<boolean>`lower(institution_name) = lower(${institutionName})`,
+    );
+  else return { retireCurrent: false };
+
+  const incomingFingerprints = sortedUnique(
+    providerAccounts.map(plaidAccountFingerprint),
+  );
+  const incomingFallback = sortedUnique(
+    providerAccounts.map(plaidAccountFallbackIdentity),
+  );
+  const matching: { id: string; createdAt: Date }[] = [];
+  for (const candidate of await candidates.execute()) {
+    const stored = await transaction
+      .selectFrom("accounts")
+      .select([
+        "name",
+        "account_type",
+        "provider_account_fingerprint",
+      ])
+      .where("household_id", "=", principal.householdId)
+      .where("connection_id", "=", candidate.id)
+      .where("provenance", "=", "plaid")
+      .where("archived_at", "is", null)
+      .execute();
+    if (stored.length !== providerAccounts.length) continue;
+    const storedFingerprints = stored.every(
+      (account) => account.provider_account_fingerprint,
+    )
+      ? sortedUnique(
+          stored.map((account) => account.provider_account_fingerprint!),
+        )
+      : [];
+    const strongMatch =
+      storedFingerprints.length > 0 &&
+      sameStringSet(storedFingerprints, incomingFingerprints);
+    const fallbackMatch = sameStringSet(
+      sortedUnique(
+        stored.map((account) =>
+          `${account.name.trim().toLowerCase()}|${account.account_type}`,
+        ),
+      ),
+      incomingFallback,
+    );
+    if (strongMatch || fallbackMatch)
+      matching.push({ id: candidate.id, createdAt: candidate.created_at });
+  }
+  if (!matching.length) return { retireCurrent: false };
+
+  const keeper = [
+    { id: current.id, createdAt: current.created_at },
+    ...matching,
+  ].sort(
+    (left, right) =>
+      left.createdAt.getTime() - right.createdAt.getTime() ||
+      left.id.localeCompare(right.id),
+  )[0]!;
+  const retire = [
+    { id: current.id, createdAt: current.created_at },
+    ...matching,
+  ].filter((connection) => connection.id !== keeper.id);
+  const now = new Date();
+  for (const duplicate of retire) {
+    await transaction
+      .updateTable("connections")
+      .set({
+        status: "revocation_pending",
+        error_code: null,
+        updated_at: now,
+      })
+      .where("household_id", "=", principal.householdId)
+      .where("id", "=", duplicate.id)
+      .where("status", "in", ["syncing", "healthy"])
+      .executeTakeFirstOrThrow();
+    await transaction
+      .updateTable("accounts")
+      .set((eb) => ({
+        include_in_plan: false,
+        version: eb("version", "+", 1),
+      }))
+      .where("household_id", "=", principal.householdId)
+      .where("connection_id", "=", duplicate.id)
+      .where("archived_at", "is", null)
+      .execute();
+    await enqueueSyncJob(
+      transaction,
+      principal.householdId,
+      duplicate.id,
+      "recovery",
+      null,
+      "revoke",
+    );
+    await addActivity(
+      transaction,
+      principal,
+      "connection.plaid.duplicate_retired",
+      "Duplicate bank connection removed",
+      `${institutionName ?? "Bank"} was already connected; the earlier healthy connection was kept`,
+      "plaid",
+      "connection",
+      duplicate.id,
+    );
+  }
+  const retireCurrent = retire.some(
+    (connection) => connection.id === current.id,
+  );
+  if (retireCurrent)
+    await transaction
+      .updateTable("sync_runs")
+      .set({
+        status: "succeeded",
+        cursor_after: current.sync_cursor,
+        added_count: 0,
+        modified_count: 0,
+        removed_count: 0,
+        completed_at: now,
+        error_code: null,
+      })
+      .where("id", "=", syncRunId)
+      .execute();
+  await persistSnapshot(transaction, principal);
+  await bumpRevision(transaction, principal);
+  return { retireCurrent };
+}
+
+function plaidAccountFingerprint(account: AccountBase): string {
+  const persistentId =
+    typeof account.persistent_account_id === "string" &&
+    account.persistent_account_id.trim()
+      ? `persistent|${account.persistent_account_id.trim()}`
+      : `fallback|${plaidAccountFallbackIdentity(account)}`;
+  return sha256(`budgefi-plaid-account-v1|${persistentId}`);
+}
+
+function plaidAccountFallbackIdentity(account: AccountBase): string {
+  const accountType = mapAccountType(
+    String(account.type),
+    account.subtype === null ? null : String(account.subtype),
+  );
+  const name = `${account.name}${account.mask ? ` •${account.mask}` : ""}`
+    .slice(0, 200)
+    .trim()
+    .toLowerCase();
+  return `${name}|${accountType}`;
+}
+
+function sortedUnique(values: string[]): string[] {
+  return [...new Set(values)].sort();
+}
+
+function sameStringSet(left: string[], right: string[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
+
 async function reconcileAccounts(
   transaction: DatabaseTransaction<Database>,
   principal: Principal,
@@ -1538,6 +1779,7 @@ async function reconcileAccounts(
     );
     const name =
       `${account.name}${account.mask ? ` •${account.mask}` : ""}`.slice(0, 200);
+    const providerFingerprint = plaidAccountFingerprint(account);
     const existing = await transaction
       .selectFrom("accounts")
       .selectAll()
@@ -1558,6 +1800,7 @@ async function reconcileAccounts(
             currency: "USD",
             provenance: "plaid",
             provider_account_id: account.account_id,
+            provider_account_fingerprint: providerFingerprint,
             connection_id: connectionId,
             include_in_plan: false,
             archived_at: null,
@@ -1570,6 +1813,7 @@ async function reconcileAccounts(
       if (
         existing.name !== name ||
         existing.account_type !== accountType ||
+        existing.provider_account_fingerprint !== providerFingerprint ||
         existing.archived_at !== null
       )
         await transaction
@@ -1577,6 +1821,7 @@ async function reconcileAccounts(
           .set((eb) => ({
             name,
             account_type: accountType,
+            provider_account_fingerprint: providerFingerprint,
             archived_at: null,
             version: eb("version", "+", 1),
           }))

@@ -40,6 +40,8 @@ describe("fresh PostgreSQL migration and seed", () => {
       "021_plaid_worker_and_deletion_boundaries.sql",
       "022_retire_interactive_sample_data.sql",
       "023_clerk_identity_lifecycle.sql",
+      "024_plaid_duplicate_item_guard.sql",
+      "025_plaid_fingerprint_write_boundary.sql",
     ]);
     expect(
       applied.rows.every((row) => /^[a-f0-9]{64}$/.test(row.checksum)),
@@ -390,6 +392,18 @@ describe("fresh PostgreSQL migration and seed", () => {
         plaid_worker_member: false,
       },
     ]);
+    expect(
+      (
+        await client.query<{
+          can_select: boolean;
+          can_insert: boolean;
+          can_update: boolean;
+        }>(`select
+          has_column_privilege('budgefi_app','accounts','provider_account_fingerprint','SELECT') as can_select,
+          has_column_privilege('budgefi_app','accounts','provider_account_fingerprint','INSERT') as can_insert,
+          has_column_privilege('budgefi_app','accounts','provider_account_fingerprint','UPDATE') as can_update`)
+      ).rows[0],
+    ).toEqual({ can_select: true, can_insert: true, can_update: true });
   });
 
   it("seeds included cash plus complete plan and commitment revision history", async () => {

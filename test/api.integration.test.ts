@@ -708,6 +708,52 @@ describe("Budgefi API with PostgreSQL", () => {
     expect(erased.rows[0]!.token).toBeNull();
   });
 
+  it("keeps the first healthy Item and revokes an accidental duplicate bank-link retry", async () => {
+    fakePlaid.uniqueItems = true;
+    const firstLink = await inject("POST", "/v1/plaid/link-token", { mode: "create" }, "dev|maya");
+    const firstExchange = await inject("POST", "/v1/plaid/exchange", {
+      sessionId: firstLink.json().sessionId,
+      publicToken: "public-first-item",
+      institution: { id: "ins_109508", name: "First Platypus Bank" },
+      requestId: uuidv7(),
+    }, "dev|maya");
+    const first = bootstrapResponseSchema.parse(firstExchange.json()).connections.find((item) => item.provider === "plaid")!;
+    expect(await processQueued(first.id)).toBe(true);
+
+    const secondLink = await inject("POST", "/v1/plaid/link-token", { mode: "create" }, "dev|maya");
+    const secondExchange = await inject("POST", "/v1/plaid/exchange", {
+      sessionId: secondLink.json().sessionId,
+      publicToken: "public-retry-item",
+      institution: { id: "ins_109508", name: "First Platypus Bank" },
+      requestId: uuidv7(),
+    }, "dev|maya");
+    const second = bootstrapResponseSchema.parse(secondExchange.json()).connections.find((item) => item.provider === "plaid" && item.id !== first.id)!;
+    expect(second.id).toBeTruthy();
+    expect(await processQueued(second.id)).toBe(true);
+
+    const pending = await admin.query<{ id: string; status: string }>(
+      "select id,status from connections where id=any($1::uuid[]) order by created_at",
+      [[first.id, second.id]],
+    );
+    expect(pending.rows).toEqual([
+      { id: first.id, status: "healthy" },
+      { id: second.id, status: "revocation_pending" },
+    ]);
+    expect(await processQueued(second.id, "revoke")).toBe(true);
+    const retired = await admin.query<{ status: string; token_removed: boolean; duplicate_events: number }>(
+      `select c.status,
+        c.encrypted_access_token is null as token_removed,
+        (select count(*)::int from activity_events where household_id=$2 and event_type='connection.plaid.duplicate_retired') as duplicate_events
+       from connections c where c.id=$1`,
+      [second.id, ids.householdA],
+    );
+    expect(retired.rows[0]).toEqual({
+      status: "revoked",
+      token_removed: true,
+      duplicate_events: 1,
+    });
+  });
+
   it("verifies the raw Plaid webhook, deduplicates delivery, and rejects body tampering", async () => {
     await connectPlaid();
     const payload = JSON.stringify({ webhook_type: "TRANSACTIONS", webhook_code: "SYNC_UPDATES_AVAILABLE", item_id: "item-sandbox", environment: "sandbox" });
@@ -928,6 +974,7 @@ class FakePlaidGateway {
   alreadyRemovedOnNext = false;
   nativeCompletionUri: string | null = null;
   linkCalls = 0;
+  uniqueItems = false;
   private readonly privateKey: KeyObject;
   private readonly publicJwk: JWK;
 
@@ -948,6 +995,7 @@ class FakePlaidGateway {
     this.alreadyRemovedOnNext = false;
     this.nativeCompletionUri = null;
     this.linkCalls = 0;
+    this.uniqueItems = false;
     this.pages.set("<initial>", syncPage({ added: [plaidTransaction({})], nextCursor: "cursor-initial", updateStatus: "INITIAL_UPDATE_COMPLETE" }));
   }
 
@@ -961,7 +1009,8 @@ class FakePlaidGateway {
   }
   async exchangePublicToken(): Promise<{ accessToken: string; itemId: string; requestId: string }> {
     this.exchangeCalls += 1;
-    return { accessToken: "access-sandbox-token", itemId: "item-sandbox", requestId: "exchange-request" };
+    const suffix = this.uniqueItems ? `-${this.exchangeCalls}` : "";
+    return { accessToken: `access-sandbox-token${suffix}`, itemId: `item-sandbox${suffix}`, requestId: "exchange-request" };
   }
   async getAccounts(): Promise<{ accounts: AccountBase[]; institutionId: string; requestId: string }> {
     return { accounts: [plaidAccount()], institutionId: "ins_109508", requestId: "accounts-request" };
