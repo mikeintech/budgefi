@@ -44,24 +44,6 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      - run: npm run db:migrate
-      - run: npm run db:bootstrap-runtime-roles
-      - run: npm run db:seed
-      - run: npm run start:worker:once
+      - run: npm run test:integration
         env:
-          NODE_ENV: production
-          NOTIFICATION_TOKEN_ENCRYPTION_KEY: CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCws=
-          NOTIFICATION_TOKEN_KEY_ID: ci-notifications-v1
-      - run: npm run start:plaid-worker
-        env:
-          NODE_ENV: production
-          ALLOW_DEV_AUTH: "false"
-          PLAID_ENABLED: "true"
-          PLAID_ENV: production
-          PLAID_CLIENT_ID: ci-client
-          PLAID_SECRET: ci-secret
-          PLAID_ACTIVE_TOKEN_KEY_ID: ci-v1
-          PLAID_TOKEN_KEYS: '{"ci-v1":"DQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0="}'
-          PLAID_JOB_MAX_ITEMS: "10"
-          PLAID_JOB_MAX_RUNTIME_MS: "10000"
-      - run: npm run test:integration:direct
+          INTEGRATION_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/budgefi_ci

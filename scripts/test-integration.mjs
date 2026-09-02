@@ -16,36 +16,45 @@ const candidates = [
 const bin = candidates.find((candidate) =>
   existsSync(join(candidate, "initdb")),
 );
-if (!bin)
+const externalDatabaseUrl = process.env.INTEGRATION_DATABASE_URL?.trim();
+if (!externalDatabaseUrl && !bin)
   throw new Error(
-    "PostgreSQL 17 binaries not found. Set POSTGRES_BIN to the directory containing initdb and pg_ctl.",
+    "PostgreSQL 17 binaries not found. Set POSTGRES_BIN or INTEGRATION_DATABASE_URL.",
   );
 
-const directory = await mkdtemp(join(tmpdir(), "budgefi-pg17-test-"));
-const port = await freePort();
-const databaseUrl = `postgresql://postgres@127.0.0.1:${port}/budgefi_test`;
+const directory = externalDatabaseUrl
+  ? null
+  : await mkdtemp(join(tmpdir(), "budgefi-pg17-test-"));
+const port = externalDatabaseUrl ? null : await freePort();
+const databaseUrl =
+  externalDatabaseUrl ??
+  `postgresql://postgres@127.0.0.1:${port}/budgefi_test`;
 let started = false;
 
 try {
-  run(join(bin, "initdb"), ["-A", "trust", "-U", "postgres", "-D", directory]);
-  run(join(bin, "pg_ctl"), [
-    "-D",
-    directory,
-    "-o",
-    `-h 127.0.0.1 -p ${port} -F`,
-    "-w",
-    "start",
-  ]);
-  started = true;
-  run(join(bin, "createdb"), [
-    "-h",
-    "127.0.0.1",
-    "-p",
-    String(port),
-    "-U",
-    "postgres",
-    "budgefi_test",
-  ]);
+  if (externalDatabaseUrl) {
+    await resetExternalDatabase(databaseUrl);
+  } else {
+    run(join(bin, "initdb"), ["-A", "trust", "-U", "postgres", "-D", directory]);
+    run(join(bin, "pg_ctl"), [
+      "-D",
+      directory,
+      "-o",
+      `-h 127.0.0.1 -p ${port} -F`,
+      "-w",
+      "start",
+    ]);
+    started = true;
+    run(join(bin, "createdb"), [
+      "-h",
+      "127.0.0.1",
+      "-p",
+      String(port),
+      "-U",
+      "postgres",
+      "budgefi_test",
+    ]);
+  }
   run("npm", ["run", "db:migrate"], {
     DATABASE_URL: databaseUrl,
     MIGRATION_MAX_NAME: "021_plaid_worker_and_deletion_boundaries.sql",
@@ -78,6 +87,7 @@ try {
   });
   run("npm", ["run", "start:plaid-worker"], {
     NODE_ENV: "production",
+    ALLOW_DEV_AUTH: "false",
     PLAID_WORKER_DATABASE_URL: plaidWorkerUrl.toString(),
     PLAID_ENABLED: "true",
     PLAID_ENV: "production",
@@ -103,7 +113,19 @@ try {
       ["-D", directory, "-m", "fast", "-w", "stop"],
       { stdio: "inherit" },
     );
-  await rm(directory, { recursive: true, force: true });
+  if (directory) await rm(directory, { recursive: true, force: true });
+}
+
+async function resetExternalDatabase(databaseUrl) {
+  const client = new pg.Client({ connectionString: databaseUrl });
+  await client.connect();
+  try {
+    await client.query("DROP SCHEMA IF EXISTS public CASCADE");
+    await client.query("CREATE SCHEMA public");
+    await client.query("GRANT ALL ON SCHEMA public TO public");
+  } finally {
+    await client.end();
+  }
 }
 
 function run(command, args, extraEnv = {}) {
