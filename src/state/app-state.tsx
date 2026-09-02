@@ -852,6 +852,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     )) {
       if (!(await setAccountInclusion(account, false))) return false;
     }
+    const manualAccount = accounts.find(
+      (item) =>
+        item.provenance === "manual" &&
+        ["cash", "checking", "savings"].includes(item.type),
+    );
+    if (
+      manualAccount &&
+      !manualAccount.includeInPlan &&
+      !(await setAccountInclusion(manualAccount, true))
+    )
+      return false;
     setDataModeRaw("manual");
     setSourceStaleRaw(false);
     return true;

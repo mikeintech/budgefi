@@ -383,6 +383,47 @@ describe("Budgefi API with PostgreSQL", () => {
     expect((await inject("PUT", `/v1/accounts/${savingsId}/inclusion`, { expectedVersion: 1, includeInPlan: false, requestId: uuidv7() }, "dev|maya")).statusCode).toBe(409);
   });
 
+  it("excludes only an unused manual placeholder when connected cash is included", async () => {
+    const placeholderId = uuidv7();
+    const connectedId = uuidv7();
+    await admin.query(
+      "INSERT INTO accounts (id, household_id, name, account_type, currency, provenance, include_in_plan, provider_account_id) VALUES ($1, $2, 'Unused manual cash', 'cash', 'USD', 'manual', true, $3), ($4, $2, 'Connected checking', 'checking', 'USD', 'plaid', false, $5)",
+      [
+        placeholderId,
+        ids.householdA,
+        `manual-${placeholderId}`,
+        connectedId,
+        `plaid-${connectedId}`,
+      ],
+    );
+    await admin.query(
+      "INSERT INTO balance_observations (household_id, account_id, amount_minor, currency, provenance, as_of, source_record_id) VALUES ($1, $2, 250000, 'USD', 'plaid', now(), 'connected-v1')",
+      [ids.householdA, connectedId],
+    );
+
+    const response = await inject(
+      "PUT",
+      `/v1/accounts/${connectedId}/inclusion`,
+      {
+        expectedVersion: 1,
+        includeInPlan: true,
+        requestId: uuidv7(),
+      },
+      "dev|maya",
+    );
+    expect(response.statusCode, response.body).toBe(200);
+    const body = bootstrapResponseSchema.parse(response.json());
+    expect(body.accounts.find((item) => item.id === placeholderId)).toEqual(
+      expect.objectContaining({ includeInPlan: false, coverage: "excluded" }),
+    );
+    expect(body.accounts.find((item) => item.id === ids.accountA)).toEqual(
+      expect.objectContaining({ includeInPlan: true, coverage: "complete" }),
+    );
+    expect(body.accounts.find((item) => item.id === connectedId)).toEqual(
+      expect.objectContaining({ includeInPlan: true }),
+    );
+  });
+
   it("marks a plan incomplete when any included account lacks a balance", async () => {
     await admin.query("INSERT INTO accounts (household_id, name, account_type, currency, provenance, include_in_plan) VALUES ($1, 'Unknown checking', 'checking', 'USD', 'manual', true)", [ids.householdA]);
     const body = bootstrapResponseSchema.parse((await inject("GET", "/v1/bootstrap", undefined, "dev|maya")).json());

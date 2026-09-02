@@ -344,12 +344,43 @@ export class CoreService {
             .where("version", "=", request.expectedVersion)
             .where("archived_at", "is", null)
             .where("account_type", "in", ["cash", "checking", "savings"])
-            .returning(["id", "version"])
+            .returning(["id", "version", "provenance"])
             .executeTakeFirst();
           if (!updated)
             throw new ConflictException(
               "Account changed, is unavailable, or cannot be included in planning",
             );
+          let removedUnusedManual = false;
+          if (request.includeInPlan && updated.provenance === "plaid") {
+            const result = await sql<{ id: string }>`
+              update accounts manual_account
+              set include_in_plan = false,
+                  version = manual_account.version + 1
+              where manual_account.household_id = ${principal.householdId}
+                and manual_account.provenance = 'manual'
+                and manual_account.include_in_plan = true
+                and manual_account.archived_at is null
+                and manual_account.account_type in ('cash', 'checking', 'savings')
+                and not exists (
+                  select 1
+                  from balance_observations observation
+                  where observation.household_id = manual_account.household_id
+                    and observation.account_id = manual_account.id
+                    and not (
+                      observation.provenance = 'manual'
+                      and observation.source_record_id = 'provisioned'
+                    )
+                )
+                and not exists (
+                  select 1
+                  from financial_transactions entry
+                  where entry.household_id = manual_account.household_id
+                    and entry.account_id = manual_account.id
+                )
+              returning manual_account.id
+            `.execute(transaction);
+            removedUnusedManual = result.rows.length > 0;
+          }
           await addActivity(
             transaction,
             principal,
@@ -362,6 +393,18 @@ export class CoreService {
             "account",
             updated.id,
           );
+          if (removedUnusedManual) {
+            await addActivity(
+              transaction,
+              principal,
+              "account.manual_placeholder.excluded",
+              "Unused manual account excluded",
+              "Connected balances now own plan coverage; no manual balance or activity was removed",
+              "derived",
+              "account",
+              updated.id,
+            );
+          }
           await persistSnapshot(transaction, principal);
           await bumpRevision(transaction, principal);
           return {

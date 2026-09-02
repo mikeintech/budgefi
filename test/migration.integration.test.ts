@@ -42,6 +42,7 @@ describe("fresh PostgreSQL migration and seed", () => {
       "023_clerk_identity_lifecycle.sql",
       "024_plaid_duplicate_item_guard.sql",
       "025_plaid_fingerprint_write_boundary.sql",
+      "026_exclude_unused_manual_placeholders.sql",
     ]);
     expect(
       applied.rows.every((row) => /^[a-f0-9]{64}$/.test(row.checksum)),

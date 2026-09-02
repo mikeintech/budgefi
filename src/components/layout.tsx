@@ -345,12 +345,19 @@ export function HealthSheet({ children }: { children: React.ReactNode }) {
     backendStatus,
     backendError,
     reloadBackend,
+    setAccountInclusion,
   } = useAppState();
   const [checking, setChecking] = useState(false);
   const manual = dataMode === "manual";
-  const shown = accounts.filter((account) =>
-    manual ? account.provenance === "manual" : account.provenance !== "manual",
-  );
+  const shown = accounts.filter((account) => {
+    const blocksCoverage =
+      account.includeInPlan &&
+      (account.coverage === "stale" || account.coverage === "missing");
+    if (blocksCoverage) return true;
+    return manual
+      ? account.provenance === "manual"
+      : account.provenance !== "manual";
+  });
   return (
     <Sheet>
       <SheetTrigger asChild>{children}</SheetTrigger>
@@ -385,7 +392,13 @@ export function HealthSheet({ children }: { children: React.ReactNode }) {
                   : "No balance observation"
               }
               impact={
-                account.includeInPlan
+                !manual &&
+                account.provenance === "manual" &&
+                account.includeInPlan &&
+                (account.coverage === "stale" ||
+                  account.coverage === "missing")
+                  ? "Included in plan · add a manual balance or remove it"
+                  : account.includeInPlan
                   ? "Included in observed cash"
                   : account.type === "credit"
                     ? "Activity only"
@@ -393,6 +406,13 @@ export function HealthSheet({ children }: { children: React.ReactNode }) {
               }
               stale={
                 account.coverage === "stale" || account.coverage === "missing"
+              }
+              onExclude={
+                !manual &&
+                account.provenance === "manual" &&
+                account.includeInPlan
+                  ? () => setAccountInclusion(account, false)
+                  : undefined
               }
             />
           ))}
@@ -452,14 +472,17 @@ function SourceRow({
   note,
   impact,
   stale = false,
+  onExclude,
 }: {
   name: string;
   note: string;
   impact: string;
   stale?: boolean;
+  onExclude?: () => Promise<boolean>;
 }) {
+  const [working, setWorking] = useState(false);
   return (
-    <div className="flex min-h-[72px] items-center gap-3 rounded-xl border border-rule bg-sheet p-3">
+    <div className="flex min-h-[72px] items-start gap-3 rounded-xl border border-rule bg-sheet p-3">
       <span
         className={cn(
           "grid size-10 shrink-0 place-items-center rounded-lg",
@@ -472,10 +495,26 @@ function SourceRow({
           <ObservedIcon className="size-5" />
         )}
       </span>
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1">
         <b>{name}</b>
         <p className="text-xs text-carbon/60">{note}</p>
         <p className="text-xs font-medium">{impact}</p>
+        {onExclude && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={working}
+            className="mt-2 bg-white"
+            onClick={async () => {
+              setWorking(true);
+              const okay = await onExclude();
+              if (!okay) setWorking(false);
+            }}
+          >
+            {working ? "Removing…" : "Remove from plan"}
+          </Button>
+        )}
       </div>
     </div>
   );
