@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Budgefi</string>
+    <string name="title_activity_main">Budgefi</string>
+    <string name="package_name">com.budgefi.app</string>
+    <string name="custom_url_scheme">com.budgefi.app</string>
+</resources>

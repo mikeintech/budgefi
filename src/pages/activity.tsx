@@ -1,11 +1,13 @@
-import { CalendarClock, Check, CircleDashed, Cloud, FileCheck2, ReceiptText, ShieldCheck } from "lucide-react";
+import { AlertTriangle, CalendarClock, Cloud, FileCheck2, ReceiptText, ShieldCheck } from "lucide-react";
 import { MobileShell } from "@/components/layout";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAppState, type ActivityEvent } from "@/state/app-state";
+import { money } from "@/lib/utils";
 
 const iconMap = { evidence: ReceiptText, plan: FileCheck2, source: Cloud, household: ShieldCheck } as const;
 
 function Timeline({ events }: { events: ActivityEvent[] }) {
+  if(events.length===0)return <div className="rounded-[22px] border border-dashed border-rule bg-white p-6 text-center"><strong className="block text-sm">No ledger activity yet</strong><p className="mt-1 text-xs leading-5 text-muted">Saved balances, commitments, connection changes, and imported transactions will appear here.</p></div>;
   return (
     <ol className="relative ml-5 border-l border-ink/15 pl-6">
       {events.map((event, index) => {
@@ -26,22 +28,23 @@ function Timeline({ events }: { events: ActivityEvent[] }) {
 }
 
 export function ActivityPage() {
-  const { events } = useAppState();
+  const { events, commitments, authoritativeProjection } = useAppState();
+  const today=new Date().toLocaleDateString("en-CA");
+  const upcoming=[...commitments].sort((left,right)=>(left.dueDate??"9999-12-31").localeCompare(right.dueDate??"9999-12-31")||left.name.localeCompare(right.name));
   return (
     <MobileShell>
       <main className="px-4 pb-8 pt-5">
         <p className="eyebrow">Proof trail</p>
         <h1 className="text-[31px] font-bold tracking-[-0.04em]">Activity</h1>
-        <p className="mt-1 text-sm leading-5 text-muted">What Budgefi observed, what you decided, and what remains unverified.</p>
+        <p className="mt-1 text-sm leading-5 text-muted">History records what changed. Upcoming shows the active commitments your plan is working around.</p>
 
         <Tabs defaultValue="history" className="mt-5">
           <TabsList><TabsTrigger value="history">History</TabsTrigger><TabsTrigger value="upcoming">Upcoming</TabsTrigger></TabsList>
           <TabsContent value="history"><Timeline events={events} /></TabsContent>
           <TabsContent value="upcoming">
-            <div className="space-y-3">
-              <div className="rounded-[22px] border border-cobalt/20 bg-white p-4"><div className="flex items-start gap-3"><CircleDashed className="size-5 shrink-0 text-cobalt" strokeWidth={1.8} /><div><p className="text-sm font-semibold">Verify MetroNet’s next statement</p><p className="mt-1 text-xs leading-5 text-muted">Expected in September. We’ll compare the amount with your saved plan.</p></div></div></div>
-              <div className="rounded-[22px] border border-ink/10 bg-white p-4"><div className="flex items-start gap-3"><CalendarClock className="size-5 shrink-0 text-cobalt" strokeWidth={1.8} /><div><p className="text-sm font-semibold">Check StreamBox cancellation</p><p className="mt-1 text-xs leading-5 text-muted">September 6 · Confirm no new subscription charge appears.</p></div></div></div>
-              <div className="rounded-[22px] bg-teal/7 p-4"><div className="flex items-start gap-3"><Check className="size-5 shrink-0 text-teal" strokeWidth={2} /><div><p className="text-sm font-semibold">No action needed now</p><p className="mt-1 text-xs leading-5 text-muted">Budgefi will bring exceptions back to Review when fresh evidence arrives.</p></div></div></div>
+            <div className="divide-y divide-rule overflow-hidden rounded-[22px] border border-rule bg-white">
+              {upcoming.map(item=>{const overdue=Boolean(item.dueDate&&item.dueDate<today);const undated=!item.dueDate;const outside=Boolean(item.dueDate&&item.dueDate>authoritativeProjection.horizonEnd);const Icon=overdue||undated?AlertTriangle:CalendarClock;return <div key={item.id} className="flex min-h-[78px] items-center gap-3 px-4 py-3"><span className={`grid size-10 shrink-0 place-items-center rounded-2xl ${overdue||undated?"bg-coral/10 text-coral":"bg-paper-deep text-cobalt"}`}><Icon className="size-5" strokeWidth={1.8}/></span><span className="min-w-0 flex-1"><strong className="block truncate text-sm">{item.name}</strong><span className={`block text-xs ${overdue||undated?"font-semibold text-coral":"text-muted"}`}>{undated?"Needs a due date · not reserved":overdue?`Past due · ${formatDate(item.dueDate!)}`:item.dueDate===today?"Due today":`${formatDate(item.dueDate!)}${outside?" · outside current plan":""}`}</span><span className="block text-[11px] text-muted">{sourceLabel(item.provenance)}</span></span><strong className="shrink-0 text-sm tabular-nums">{money(Number(BigInt(item.amount.minor))/100)}</strong></div>})}
+              {upcoming.length===0&&<div className="p-6 text-center"><CalendarClock className="mx-auto size-6 text-cobalt"/><strong className="mt-2 block text-sm">No upcoming commitments</strong><p className="mt-1 text-xs leading-5 text-muted">Add one in the manual workspace and it will appear here.</p></div>}
             </div>
           </TabsContent>
         </Tabs>
@@ -49,3 +52,6 @@ export function ActivityPage() {
     </MobileShell>
   );
 }
+
+function formatDate(value:string){return new Intl.DateTimeFormat("en-US",{month:"short",day:"numeric",year:new Date(`${value}T12:00:00Z`).getUTCFullYear()!==new Date().getFullYear()?"numeric":undefined,timeZone:"UTC"}).format(new Date(`${value}T12:00:00Z`))}
+function sourceLabel(value:string){return value==="manual"?"You entered":value==="plaid"?"Connected data":value==="csv"?"Imported":value==="derived"?"Detected":"Historical"}

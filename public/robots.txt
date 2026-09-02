@@ -1,0 +1,18 @@
+User-agent: *
+Allow: /
+Disallow: /activity
+Disallow: /connections
+Disallow: /forgot-password
+Disallow: /manual
+Disallow: /more
+Disallow: /native-auth
+Disallow: /onboarding
+Disallow: /open/
+Disallow: /plan
+Disallow: /review
+Disallow: /settings
+Disallow: /sign-in
+Disallow: /sign-up
+Disallow: /today
+
+Sitemap: https://budgefi.com/sitemap.xml

@@ -17,10 +17,19 @@ button,a,input,select { -webkit-tap-highlight-color:transparent; }
 button,a { touch-action:manipulation; }
 .tabular { font-variant-numeric:tabular-nums lining-nums; }
 .tabular-nums { font-variant-numeric:tabular-nums lining-nums; }
-.eyebrow { margin:0 0 .35rem; font-size:.69rem; line-height:1rem; font-weight:700; letter-spacing:.13em; text-transform:uppercase; color:#676b67; }
+.eyebrow { margin:0 0 .35rem; font-size:.69rem; line-height:1rem; font-weight:700; letter-spacing:.13em; text-transform:uppercase; color:#565b57; }
 .paper-grain { position:relative; isolation:isolate; background-color:#f3eedf; }
 .paper-grain::before { content:""; position:absolute; inset:0; z-index:-1; pointer-events:none; opacity:.21; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.78' numOctaves='3' seed='29'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.045'/%3E%3C/svg%3E"); }
 .safe-bottom { padding-bottom:calc(100px + env(safe-area-inset-bottom)); }
+[data-platform="ios"] body,[data-platform="android"] body { overscroll-behavior-y:none; -webkit-user-select:none; user-select:none; }
+[data-platform="ios"] input,[data-platform="ios"] textarea,[data-platform="android"] input,[data-platform="android"] textarea { -webkit-user-select:text; user-select:text; }
+[data-platform="ios"] .native-root-content,[data-platform="android"] .native-root-content { padding-top:calc(env(safe-area-inset-top) + 8px); }
+[data-platform="ios"] .native-detail-header,[data-platform="android"] .native-detail-header { height:calc(52px + env(safe-area-inset-top)); padding-top:env(safe-area-inset-top); }
+[data-platform="ios"] .native-tabbar,[data-platform="android"] .native-tabbar { height:calc(68px + env(safe-area-inset-bottom)); }
+[data-platform="ios"] .safe-bottom,[data-platform="android"] .safe-bottom { padding-bottom:calc(84px + env(safe-area-inset-bottom)); }
+[data-platform="ios"] #root > div,[data-platform="android"] #root > div { padding:0!important; background:#f3eedf!important; }
+[data-platform="ios"] .native-app-shell,[data-platform="android"] .native-app-shell { max-width:none!important; border:0!important; border-radius:0!important; box-shadow:none!important; }
+[data-platform="ios"] #root > div > div > header,[data-platform="ios"] #root > div > div > section > header,[data-platform="android"] #root > div > div > header,[data-platform="android"] #root > div > div > section > header { min-height:calc(56px + env(safe-area-inset-top)); height:calc(56px + env(safe-area-inset-top)); padding-top:env(safe-area-inset-top); }
 .scrollbar-none::-webkit-scrollbar { display:none; }
 .scrollbar-none { scrollbar-width:none; }
 .field { height:3.5rem; width:100%; border-radius:1rem; border:1px solid #c9c5b9; background:#fff; padding:0 1rem; font-size:1rem; outline:none; }

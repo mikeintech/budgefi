@@ -1,5 +1,7 @@
 node_modules/
 dist/
+dist-backend/
+.netlify/
 work/
 outputs/
 design/
@@ -9,3 +11,8 @@ vite.config.d.ts
 public/assets/editorial/cell-*.png
 public/assets/editorial/*-green.png
 .DS_Store
+.env
+.env.local
+!.env.example
+public/.well-known/apple-app-site-association
+public/.well-known/assetlinks.json

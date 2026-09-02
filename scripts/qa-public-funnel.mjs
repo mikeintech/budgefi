@@ -1,20 +1,62 @@
 import { chromium } from "playwright";
 
-const base="http://127.0.0.1:4411";
-const browser=await chromium.launch({headless:true,executablePath:"/Users/mikeyottled/Library/Caches/ms-playwright/chromium_headless_shell-1200/chrome-headless-shell-mac-arm64/chrome-headless-shell"});
-const errors=[];const reports=[];
+const base = "http://127.0.0.1:4411";
+const browser = await chromium.launch({ headless: true });
+const errors = [];
+const reports = [];
 
-async function inspect(page,name){const report=await page.evaluate(()=>({width:document.documentElement.clientWidth,scrollWidth:document.documentElement.scrollWidth,unlabeledButtons:[...document.querySelectorAll('button')].filter(x=>!x.textContent?.trim()&&!x.getAttribute('aria-label')).length,smallTargets:[...document.querySelectorAll('button,a,input:not([type="checkbox"]),select')].filter(x=>{const r=x.getBoundingClientRect();return r.width>0&&r.height>0&&(r.width<44||r.height<44)}).map(x=>({label:(x.getAttribute('aria-label')||x.textContent||'').trim().slice(0,36),w:Math.round(x.getBoundingClientRect().width),h:Math.round(x.getBoundingClientRect().height)}))}));reports.push([name,report]);if(report.scrollWidth>report.width)errors.push(`${name}: horizontal overflow ${report.scrollWidth}/${report.width}`);if(report.unlabeledButtons)errors.push(`${name}: ${report.unlabeledButtons} unlabeled buttons`);if(report.smallTargets.length)errors.push(`${name}: small targets ${JSON.stringify(report.smallTargets)}`)}
+async function inspect(page, name) {
+  const report = await page.evaluate(() => ({
+    width: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+    unlabeledButtons: [...document.querySelectorAll("button")].filter(
+      (element) =>
+        !element.textContent?.trim() && !element.getAttribute("aria-label"),
+    ).length,
+    smallTargets: [
+      ...document.querySelectorAll(
+        "button,a,input:not([type=checkbox]),select",
+      ),
+    ].filter((element) => {
+      const rect = element.getBoundingClientRect();
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        (rect.width < 44 || rect.height < 44)
+      );
+    }).length,
+  }));
+  reports.push([name, report]);
+  if (report.scrollWidth > report.width)
+    errors.push(`${name}: horizontal overflow`);
+  if (report.unlabeledButtons) errors.push(`${name}: unlabeled buttons`);
+  if (report.smallTargets) errors.push(`${name}: small touch targets`);
+}
 
-for(const width of [320,390,430]){const context=await browser.newContext({viewport:{width,height:844},deviceScaleFactor:1,isMobile:true,hasTouch:true});const page=await context.newPage();await page.goto(`${base}/`,{waitUntil:'networkidle'});await inspect(page,`landing-${width}`);if(!await page.getByText('Local interactive demo · no real account or bank connection.',{exact:true}).isVisible())errors.push(`landing-${width}: disclosure not visible`);await context.close()}
+for (const width of [320, 390, 430, 1280]) {
+  const context = await browser.newContext({
+    viewport: { width, height: width >= 1000 ? 900 : 844 },
+    isMobile: width < 1000,
+    hasTouch: width < 1000,
+  });
+  const page = await context.newPage();
+  await page.goto(base, { waitUntil: "networkidle" });
+  await inspect(page, `landing-${width}`);
+  await context.close();
+}
 
-const context=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true});const page=await context.newPage();page.on('pageerror',e=>errors.push(`page: ${e.message}`));page.on('console',m=>{if(m.type()==='error')errors.push(`console: ${m.text()}`)});
-await page.goto(`${base}/sign-up`,{waitUntil:'networkidle'});await inspect(page,'sign-up');await page.getByRole('button',{name:'Continue to sample setup'}).click();for(const text of ['Enter a display name for the form preview.','Enter a valid email format.','Use at least 8 characters for this sample.','Confirm that you understand this is a local sample.'])if(!await page.getByText(text,{exact:true}).isVisible())errors.push(`missing validation: ${text}`);
-await page.getByLabel('Display name preview').fill('Sample Person');await page.getByLabel('Email').fill('sample@example.com');await page.getByLabel('Sample password').fill('sample-only-123');await page.getByLabel('I understand this is a local interactive sample; no user or bank account is created.').check();await page.getByRole('button',{name:'Continue to sample setup'}).click();await page.waitForURL('**/onboarding?from=signup');try{await page.getByRole('heading',{name:'Who should this plan work for?'}).waitFor({state:'visible',timeout:3000})}catch{errors.push('sign-up did not skip redundant onboarding welcome')}
+const context = await browser.newContext({
+  viewport: { width: 390, height: 844 },
+  isMobile: true,
+  hasTouch: true,
+});
+const page = await context.newPage();
+await page.goto(`${base}/sign-in`, { waitUntil: "networkidle" });
+await page
+  .getByRole("heading", { name: "Sign-in is temporarily unavailable" })
+  .waitFor();
+await inspect(page, "auth-fail-closed");
+await context.close();
 
-await page.goto(`${base}/sign-in`,{waitUntil:'networkidle'});await page.getByRole('button',{name:'Continue to sample workspace'}).click();if(!await page.getByText('Enter a valid email format.',{exact:true}).isVisible())errors.push('sign-in email validation missing');await page.getByLabel('Email').fill('sample@example.com');await page.getByLabel('Sample password').fill('sample-only-123');await page.getByRole('button',{name:'Continue to sample workspace'}).click();await page.waitForURL('**/today');
-
-await page.goto(`${base}/forgot-password`,{waitUntil:'networkidle'});await page.getByLabel('Email').fill('sample@example.com');await page.getByRole('button',{name:'Show recovery state'}).click();if(!await page.getByRole('heading',{name:'No email was sent'}).isVisible())errors.push('reset honesty state missing');
-
-await page.setViewportSize({width:1280,height:900});await page.goto(`${base}/`,{waitUntil:'networkidle'});await inspect(page,'landing-desktop');
-console.log(JSON.stringify({errors,reports},null,2));await browser.close();
+console.log(JSON.stringify({ errors, reports }, null, 2));
+await browser.close();

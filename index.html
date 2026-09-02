@@ -4,11 +4,70 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#f3eedf" />
-    <meta name="description" content="Budgefi mobile product demo" />
-    <title>Budgefi · Pocket Money Desk</title>
+    <meta name="color-scheme" content="light" />
+    <meta name="application-name" content="Budgefi" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Budgefi" />
+    <meta name="description" content="Budgefi helps households build a traceable cash plan, monitor account coverage, and review unusual charges without moving money." />
+    <meta name="robots" content="index, follow" />
+
+    <link rel="canonical" href="https://budgefi.com/" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Budgefi" />
+    <meta property="og:title" content="Financial clarity you can trace · Budgefi" />
+    <meta property="og:description" content="Build a traceable cash plan, monitor account coverage, and review unusual charges without moving money." />
+    <meta property="og:url" content="https://budgefi.com/" />
+    <meta property="og:image" content="https://budgefi.com/social-card.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Budgefi — financial clarity you can trace" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Financial clarity you can trace · Budgefi" />
+    <meta name="twitter:description" content="Build a traceable cash plan, monitor account coverage, and review unusual charges without moving money." />
+    <meta name="twitter:image" content="https://budgefi.com/social-card.png" />
+    <meta name="twitter:image:alt" content="Budgefi — financial clarity you can trace" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "Budgefi",
+        "url": "https://budgefi.com/",
+        "applicationCategory": "FinanceApplication",
+        "operatingSystem": "Web",
+        "description": "A household finance workspace for traceable cash planning, account coverage monitoring, and unusual-charge review.",
+        "featureList": [
+          "Manual or read-only connected account data",
+          "Traceable household cash planning",
+          "Connection coverage monitoring",
+          "Unusual-charge review"
+        ]
+      }
+    </script>
+    <title>Financial clarity you can trace · Budgefi</title>
+    <style>
+      .static-shell{min-height:100vh;background:#f3eedf;color:#191c1b;font-family:system-ui,sans-serif;display:grid;place-items:center;padding:32px 22px}.static-shell__inner{max-width:760px}.static-shell__brand{display:flex;align-items:center;gap:10px;color:#191c1b;text-decoration:none;font-size:22px;font-weight:750}.static-shell__brand img{width:34px;height:34px}.static-shell h1{font-size:clamp(42px,8vw,72px);line-height:.98;letter-spacing:-.055em;margin:56px 0 20px}.static-shell p{max-width:620px;color:#565b57;font-size:18px;line-height:1.55}.static-shell__actions{display:flex;flex-wrap:wrap;gap:12px;margin-top:28px}.static-shell__actions a{min-height:52px;display:inline-flex;align-items:center;padding:0 20px;border:1px solid #3155c6;border-radius:14px;color:#3155c6;font-weight:700;text-decoration:none}.static-shell__actions a:first-child{background:#3155c6;color:white}.static-shell__legal{margin-top:48px;display:flex;gap:24px}.static-shell__legal a{color:#565b57}
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <main class="static-shell">
+        <div class="static-shell__inner">
+          <a class="static-shell__brand" href="/" aria-label="Budgefi home"><img src="/brand/budgefi-mark.svg" alt="" /><span>budgefi</span></a>
+          <h1>Finding the charge is the easy part. See how Budgefi is designed to follow it through.</h1>
+          <p>Build a traceable household cash plan, monitor account coverage, and review unusual charges. Start manually or connect accounts when you are ready. Budgefi is read-only and does not move money.</p>
+          <div class="static-shell__actions"><a href="/sign-up">Create account</a></div>
+          <nav class="static-shell__legal" aria-label="Legal"><a href="/privacy.html">Privacy</a><a href="/terms.html">Terms</a></nav>
+        </div>
+      </main>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

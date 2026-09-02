@@ -1,0 +1,15 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+android
+ios
+node_modules
+dist
+dist-backend
+work
+outputs
+design
+test
+*.tsbuildinfo

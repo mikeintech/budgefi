@@ -9,8 +9,8 @@ const variants = cva('inline-flex min-h-12 items-center justify-center gap-2 rou
     secondary: 'border border-rule bg-sheet text-carbon hover:bg-recessed',
     ghost: 'text-pencil hover:bg-pencil/8',
     outline: 'border border-rule bg-sheet text-carbon hover:bg-recessed',
-    destructive: 'bg-coral text-white hover:bg-[#bd4c3d]',
-  }, size: { default: 'h-12', sm: 'min-h-10 px-3 text-sm', lg: 'min-h-14 px-5 text-[15px]', icon: 'size-12 p-0' } }, defaultVariants: { variant: 'default', size: 'default' }
+    destructive: 'bg-coral text-white hover:bg-[#873025]',
+  }, size: { default: 'h-12', sm: 'min-h-11 px-3 text-sm', lg: 'min-h-14 px-5 text-[15px]', icon: 'size-12 p-0' } }, defaultVariants: { variant: 'default', size: 'default' }
 })
 export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement>, VariantProps<typeof variants> { asChild?: boolean }
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(({ className, variant, size, asChild=false, ...props }, ref) => { const Comp=asChild?Slot:'button'; return <Comp className={cn(variants({variant,size}),className)} ref={ref} {...props}/> })

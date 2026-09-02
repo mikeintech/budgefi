@@ -1,48 +1,463 @@
-import { FormEvent, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { ArrowLeft, Check, Eye, EyeOff, FileCheck2, LockKeyhole, MonitorSmartphone, ShieldCheck } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { SignIn, SignUp, useAuth, useSignIn } from "@clerk/react";
+import { Browser } from "@capacitor/browser";
+import { SystemSession } from "@budgefi/capacitor-system-session";
+import { Link, Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import {
+  ArrowLeft,
+  FileCheck2,
+  LockKeyhole,
+  PenLine,
+  ShieldCheck,
+} from "lucide-react";
 import { Wordmark } from "@/components/brand";
 import { Button } from "@/components/ui/button";
-import { useAppState } from "@/state/app-state";
-import { cn } from "@/lib/utils";
+import { authRouteUrl, clerkConfigured } from "@/lib/auth";
+import { isNativeApp, nativePlatform } from "@/lib/platform";
+import { api } from "@/lib/api";
+import { nativeSecureGet, nativeSecureRemove, nativeSecureSet } from "@/lib/native-storage";
+import { markNativeCleanupRequired } from "@/lib/native-cleanup-marker";
+import {
+  isUsableNativeAuthPending,
+  nativeAuthCallbackKey,
+  nativeAuthPendingLifetimeMs,
+  nativeAuthStateKey,
+  type NativeAuthCallback,
+  type NativeAuthPending,
+} from "@/lib/native-flows";
 
-const editorialAsset=(name:string)=>`${import.meta.env.BASE_URL}assets/editorial/${name}`;
+const editorialAsset = (name: string) =>
+  `${import.meta.env.BASE_URL}assets/editorial/${name}`;
 
-type Errors=Partial<Record<'name'|'email'|'password'|'ack',string>>;
-const emailPattern=/^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-export function SignUpPage(){
-  const navigate=useNavigate();const state=useAppState();
-  const [name,setName]=useState('');const [email,setEmail]=useState('');const [password,setPassword]=useState('');const [ack,setAck]=useState(false);const [show,setShow]=useState(false);const [errors,setErrors]=useState<Errors>({});
-  const nameRef=useRef<HTMLInputElement>(null);const emailRef=useRef<HTMLInputElement>(null);const passwordRef=useRef<HTMLInputElement>(null);const ackRef=useRef<HTMLInputElement>(null);
-  const validate=(field?:keyof Errors)=>{const next:Errors={...errors};if(!field||field==='name')next.name=name.trim()?'':'Enter a display name for the form preview.';if(!field||field==='email')next.email=emailPattern.test(email)?'':'Enter a valid email format.';if(!field||field==='password')next.password=password.length>=8?'':'Use at least 8 characters for this sample.';if(!field||field==='ack')next.ack=ack?'':'Confirm that you understand this is a local sample.';setErrors(next);return next};
-  const submit=(event:FormEvent)=>{event.preventDefault();const next=validate();const first=(['name','email','password','ack'] as const).find(key=>next[key]);if(first){({name:nameRef,email:emailRef,password:passwordRef,ack:ackRef}[first].current)?.focus();return}state.setOnboardingCompleted(false);navigate('/onboarding?from=signup')};
-  return <AuthShell title="Preview sample setup" intro="Try the production-style form validation, then continue to the interactive onboarding sample. No profile or session is created.">
-    <form onSubmit={submit} noValidate className="mt-7 space-y-4">
-      <Field id="signup-name" label="Display name preview" error={errors.name}><input ref={nameRef} id="signup-name" autoComplete="name" value={name} onChange={e=>setName(e.target.value)} onBlur={()=>validate('name')} aria-invalid={!!errors.name} aria-describedby={errors.name?'signup-name-error':undefined} className="field"/></Field>
-      <Field id="signup-email" label="Email" error={errors.email}><input ref={emailRef} id="signup-email" type="email" inputMode="email" autoComplete="email" value={email} onChange={e=>setEmail(e.target.value)} onBlur={()=>validate('email')} aria-invalid={!!errors.email} aria-describedby={errors.email?'signup-email-error':undefined} className="field"/></Field>
-      <PasswordField id="signup-password" label="Sample password" value={password} setValue={setPassword} show={show} setShow={setShow} inputRef={passwordRef} error={errors.password} onBlur={()=>validate('password')} autoComplete="new-password"/>
-      <p className="rounded-2xl bg-recessed p-3 text-xs leading-5 text-muted"><strong className="text-ink">Do not reuse a real password.</strong> This value stays only in the current page session and is not stored or sent.</p>
-      <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-rule bg-white p-3"><input ref={ackRef} type="checkbox" checked={ack} onChange={e=>{setAck(e.target.checked);setErrors(value=>({...value,ack:undefined}))}} aria-invalid={!!errors.ack} aria-describedby={errors.ack?'signup-ack-error':undefined} className="mt-1 size-5 shrink-0 accent-pencil"/><span className="text-xs leading-5">I understand this is a local interactive sample; no user or bank account is created.</span></label>{errors.ack&&<p id="signup-ack-error" className="-mt-2 text-xs font-semibold text-coral" aria-live="polite">{errors.ack}</p>}
-      <Button type="submit" size="lg" className="w-full">Continue to sample setup</Button>
-    </form>
-    <p className="mt-5 flex min-h-11 items-center justify-center text-center text-sm text-muted">Previewing a return visit? <Link className="-my-3 ml-1 flex min-h-11 items-center font-bold text-pencil" to="/sign-in">Sign-in flow</Link></p>
-  </AuthShell>
+export function SignUpPage() {
+  return clerkConfigured ? <ClerkEntry mode="signup" /> : <AuthUnavailable />;
 }
 
-export function SignInPage(){
-  const navigate=useNavigate();const [email,setEmail]=useState('');const [password,setPassword]=useState('');const [show,setShow]=useState(false);const [errors,setErrors]=useState<Errors>({});const emailRef=useRef<HTMLInputElement>(null);const passwordRef=useRef<HTMLInputElement>(null);
-  const submit=(event:FormEvent)=>{event.preventDefault();const next:Errors={email:emailPattern.test(email)?'':'Enter a valid email format.',password:password.length>=8?'':'Enter at least 8 characters.'};setErrors(next);if(next.email){emailRef.current?.focus();return}if(next.password){passwordRef.current?.focus();return}navigate('/today')};
-  return <AuthShell title="Preview returning-user sign in" intro="Try the validation and open the local workspace. Any correctly formatted sample values work; no account lookup or session occurs."><form onSubmit={submit} noValidate className="mt-7 space-y-4"><Field id="signin-email" label="Email" error={errors.email}><input ref={emailRef} id="signin-email" type="email" inputMode="email" autoComplete="email" value={email} onChange={e=>setEmail(e.target.value)} onBlur={()=>setErrors(v=>({...v,email:emailPattern.test(email)?undefined:'Enter a valid email format.'}))} aria-invalid={!!errors.email} aria-describedby={errors.email?'signin-email-error':undefined} className="field"/></Field><PasswordField id="signin-password" label="Sample password" value={password} setValue={setPassword} show={show} setShow={setShow} inputRef={passwordRef} error={errors.password} onBlur={()=>setErrors(v=>({...v,password:password.length>=8?undefined:'Enter at least 8 characters.'}))} autoComplete="current-password"/><div className="flex justify-end"><Link to="/forgot-password" className="flex min-h-11 items-center text-sm font-bold text-pencil">Forgot password?</Link></div><Button type="submit" size="lg" className="w-full">Continue to sample workspace</Button><Button asChild type="button" size="lg" variant="outline" className="w-full"><Link to="/today">Explore without signing in</Link></Button></form><p className="mt-5 flex min-h-11 items-center justify-center text-center text-sm text-muted">Want the first-visit flow? <Link className="-my-3 ml-1 flex min-h-11 items-center font-bold text-pencil" to="/sign-up">Setup preview</Link></p></AuthShell>
+export function SignInPage() {
+  return clerkConfigured ? <ClerkEntry mode="signin" /> : <AuthUnavailable />;
 }
 
-export function ForgotPasswordPage(){
-  const [email,setEmail]=useState('');const [error,setError]=useState('');const [sent,setSent]=useState(false);const ref=useRef<HTMLInputElement>(null);
-  const submit=(event:FormEvent)=>{event.preventDefault();if(!emailPattern.test(email)){setError('Enter a valid email format.');ref.current?.focus();return}setError('');setSent(true)};
-  return <AuthShell title="Reset the sample password" intro="This state demonstrates recovery copy only; there is no email service in the local demo.">{sent?<div className="mt-7 rounded-[22px] border border-pencil/15 bg-pencil/[.04] p-5" role="status"><span className="grid size-11 place-items-center rounded-2xl bg-pencil text-white"><Check className="size-5"/></span><h2 className="mt-4 text-lg font-bold">No email was sent</h2><p className="mt-2 text-sm leading-6 text-muted">This is a local interaction sample. Your entered email was not stored or transmitted.</p><Button asChild variant="outline" className="mt-5 w-full"><Link to="/sign-in">Return to sign in</Link></Button></div>:<form onSubmit={submit} noValidate className="mt-7 space-y-4"><Field id="reset-email" label="Email" error={error}><input ref={ref} id="reset-email" type="email" inputMode="email" autoComplete="email" value={email} onChange={e=>setEmail(e.target.value)} aria-invalid={!!error} aria-describedby={error?'reset-email-error':undefined} className="field"/></Field><Button type="submit" size="lg" className="w-full">Show recovery state</Button></form>}</AuthShell>
+export function ForgotPasswordPage() {
+  return clerkConfigured ? <ClerkEntry mode="recovery" /> : <AuthUnavailable />;
 }
 
-function AuthShell({title,intro,children}:{title:string;intro:string;children:React.ReactNode}){return <div className="paper-grain min-h-dvh bg-paper sm:p-5"><div className="mx-auto min-h-dvh max-w-[1040px] overflow-hidden sm:min-h-[calc(100dvh-40px)] sm:rounded-[28px] sm:border sm:border-rule sm:bg-sheet sm:shadow-card lg:grid lg:grid-cols-[.9fr_1.1fr]"><section className="flex min-h-dvh flex-col px-5 pb-8 pt-4 sm:min-h-0 sm:px-8 lg:p-10"><header className="flex h-12 items-center"><Link to="/" className="grid size-11 place-items-center rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pencil" aria-label="Back to landing"><ArrowLeft className="size-5"/></Link><div className="mx-auto"><Wordmark/></div><div className="size-11"/></header><main className="mx-auto flex w-full max-w-[430px] flex-1 flex-col justify-center py-7"><span className="inline-flex w-fit rounded-full bg-citron px-2.5 py-1 text-[9px] font-bold uppercase tracking-[.1em]">Interactive sample</span><h1 className="mt-5 text-[36px] font-bold leading-[1.02] tracking-[-.055em]">{title}</h1><p className="mt-3 text-sm leading-6 text-muted">{intro}</p><div className="mt-4 flex gap-2 rounded-2xl border border-coral/15 bg-coral/[.045] p-3 text-xs leading-5 text-muted"><MonitorSmartphone className="mt-0.5 size-4 shrink-0 text-coral"/><span><strong className="text-ink">Local demo only.</strong> No profile or session is created, and entries are discarded on navigation.</span></div>{children}</main></section><aside className="relative hidden overflow-hidden bg-ink p-10 text-white lg:flex lg:flex-col lg:justify-between"><img src={editorialAsset("ledger-folios.png")} alt="" aria-hidden="true" className="pointer-events-none absolute -right-10 -top-8 w-48 rotate-6 opacity-[.12] grayscale"/><div className="relative"><p className="text-[10px] font-bold uppercase tracking-[.13em] text-citron">Why the sample asks</p><h2 className="mt-3 max-w-[430px] text-[42px] font-bold leading-[1.02] tracking-[-.05em]">Identity first. Bank connection later.</h2><p className="mt-4 max-w-[440px] text-sm leading-6 text-white/60">A production user account and a financial-source connection would remain separate decisions.</p></div><div className="relative space-y-3"><AuthProof icon={MonitorSmartphone} text="The local sample does not create a user account"/><AuthProof icon={LockKeyhole} text="No password is stored, logged, or sent"/><AuthProof icon={ShieldCheck} text="Onboarding explains connection permissions separately"/><AuthProof icon={FileCheck2} text="You review the plan before using it"/></div></aside></div></div>}
-function Field({id,label,error,children}:{id:string;label:string;error?:string;children:React.ReactNode}){return <div><label htmlFor={id} className="mb-2 block text-sm font-semibold">{label}</label>{children}{error&&<p id={`${id}-error`} className="mt-1.5 text-xs font-semibold text-coral" aria-live="polite">{error}</p>}</div>}
-function PasswordField({id,label,value,setValue,show,setShow,inputRef,error,onBlur,autoComplete}:{id:string;label:string;value:string;setValue:(v:string)=>void;show:boolean;setShow:(v:boolean)=>void;inputRef:React.RefObject<HTMLInputElement>;error?:string;onBlur:()=>void;autoComplete:string}){return <div><label htmlFor={id} className="mb-2 block text-sm font-semibold">{label}</label><div className={cn("flex h-14 items-center rounded-2xl border bg-white focus-within:ring-2 focus-within:ring-pencil",error?'border-coral':'border-rule')}><input ref={inputRef} id={id} type={show?'text':'password'} autoComplete={autoComplete} value={value} onChange={e=>setValue(e.target.value)} onBlur={onBlur} aria-invalid={!!error} aria-describedby={error?`${id}-error`:undefined} className="h-full min-w-0 flex-1 rounded-l-2xl bg-transparent px-4 text-base outline-none"/><button type="button" onClick={()=>setShow(!show)} className="grid size-12 place-items-center rounded-xl text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pencil" aria-label={show?'Hide password':'Show password'} aria-pressed={show}>{show?<EyeOff className="size-5"/>:<Eye className="size-5"/>}</button></div>{error&&<p id={`${id}-error`} className="mt-1.5 text-xs font-semibold text-coral" aria-live="polite">{error}</p>}</div>}
-function AuthProof({icon:Icon,text}:{icon:typeof ShieldCheck;text:string}){return <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[.045] p-4"><span className="grid size-10 place-items-center rounded-2xl bg-white/10 text-citron"><Icon className="size-5"/></span><span className="text-sm font-semibold">{text}</span></div>}
+function AuthUnavailable() {
+  return (
+    <AuthShell
+      title="Sign-in is temporarily unavailable"
+      intro="Budgefi could not open secure account access. Your financial information has not been loaded."
+    >
+      <div
+        className="mt-7 rounded-[22px] border border-coral/20 bg-coral/[.045] p-5"
+        role="alert"
+      >
+        <LockKeyhole className="size-6 text-coral" />
+        <p className="mt-3 text-sm leading-6 text-muted">
+          Please try again later. If this continues, contact Budgefi support.
+        </p>
+        <Button asChild variant="outline" className="mt-5 w-full bg-white">
+          <Link to="/">Return home</Link>
+        </Button>
+      </div>
+    </AuthShell>
+  );
+}
+
+function ClerkEntry({ mode }: { mode: "signup" | "signin" | "recovery" }) {
+  if (isNativeApp) return <NativeClerkEntry mode={mode} />;
+  const { isLoaded, isSignedIn } = useAuth();
+  const location = useLocation();
+  const signup = mode === "signup";
+  const recovery = mode === "recovery";
+  const requested = (location.state as { from?: string } | null)?.from;
+  // Clerk establishes the session after verification. Always re-enter through a
+  // protected route so the server-backed onboarding gate decides what comes next.
+  const returnTo =
+    requested?.startsWith("/") && !requested.startsWith("//")
+      ? requested
+      : "/today";
+  if (isLoaded && isSignedIn) return <Navigate to={returnTo} replace />;
+  return (
+    <AuthShell
+      title=""
+      intro=""
+    >
+      <div className="w-full">
+        {signup ? (
+          <SignUp
+            routing="path"
+            path="/sign-up"
+            signInUrl="/sign-in"
+            fallbackRedirectUrl={authRouteUrl(returnTo)}
+            appearance={clerkAppearance}
+          />
+        ) : (
+          <SignIn
+            routing="path"
+            path={recovery ? "/forgot-password" : "/sign-in"}
+            signUpUrl="/sign-up"
+            fallbackRedirectUrl={authRouteUrl(returnTo)}
+            appearance={clerkAppearance}
+          />
+        )}
+      </div>
+      {recovery && (
+        <p className="mx-auto mt-4 flex max-w-[400px] items-start gap-2 text-xs leading-5 text-muted">
+          <LockKeyhole className="mt-0.5 size-4 shrink-0 text-pencil" />
+          Choose “Forgot password?” to start recovery. Budgefi never sees your
+          password or verification code.
+        </p>
+      )}
+    </AuthShell>
+  );
+}
+
+function NativeClerkEntry({ mode }: { mode: "signup" | "signin" | "recovery" }) {
+  const { isLoaded: authLoaded, isSignedIn } = useAuth();
+  const { signIn } = useSignIn();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [phase, setPhase] = useState<"idle" | "opening" | "finishing" | "error">("idle");
+  const [message, setMessage] = useState<string | null>(null);
+  const consuming = useRef(false);
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
+  const requested = (location.state as { from?: string } | null)?.from;
+  const returnTo = requested?.startsWith("/") && !requested.startsWith("//") ? requested : "/today";
+
+  const finish = useCallback(async ({ state, ticket }: NativeAuthCallback) => {
+    if (consuming.current) return;
+    consuming.current = true;
+    setPhase("finishing");
+    setMessage(null);
+    try {
+      const pending = await nativeSecureGet<NativeAuthPending>(nativeAuthStateKey);
+      if (!isUsableNativeAuthPending(pending))
+        throw new Error("This sign-in attempt expired. Start again from Budgefi.");
+      if (!state || pending.state !== state || !ticket)
+        throw new Error("The sign-in return could not be verified. Start again from Budgefi.");
+      if (!signIn)
+        throw new Error("Budgefi is still preparing sign in. Try again.");
+      markNativeCleanupRequired();
+      const ticketResult = await signIn.ticket({ ticket });
+      if (ticketResult.error) throw ticketResult.error;
+      if (signIn.status !== "complete" || !signIn.createdSessionId)
+        throw new Error("Sign in needs another step. Start again to continue securely.");
+      const finalization = await signIn.finalize();
+      if (finalization.error) throw finalization.error;
+      await Promise.all([nativeSecureRemove(nativeAuthStateKey), nativeSecureRemove(nativeAuthCallbackKey)]);
+      navigate(pending.returnTo, { replace: true });
+    } catch (error) {
+      await Promise.all([
+        nativeSecureRemove(nativeAuthStateKey).catch(() => undefined),
+        nativeSecureRemove(nativeAuthCallbackKey).catch(() => undefined),
+      ]);
+      consuming.current = false;
+      setMessage(error instanceof Error ? error.message : "Sign in was not completed.");
+      setPhase("error");
+    }
+  }, [navigate, signIn]);
+
+  useEffect(() => {
+    const listener = (event: Event) => {
+      void finish((event as CustomEvent<NativeAuthCallback>).detail);
+    };
+    window.addEventListener("budgefi:auth-complete", listener);
+    const cancelListener = () => {
+      consuming.current = false;
+      setMessage("Sign in was canceled. Nothing changed in Budgefi.");
+      setPhase("idle");
+    };
+    window.addEventListener("budgefi:auth-cancel", cancelListener);
+    let browserListener: Awaited<ReturnType<typeof Browser.addListener>> | null = null;
+    let closeTimer: ReturnType<typeof setTimeout> | null = null;
+    if (nativePlatform === "android")
+      void Browser.addListener("browserFinished", () => {
+        closeTimer = setTimeout(() => {
+          if (phaseRef.current !== "opening" || consuming.current) return;
+          void nativeSecureGet<NativeAuthCallback>(nativeAuthCallbackKey).then(
+            async (callback) => {
+              if (callback) return finish(callback);
+              await nativeSecureRemove(nativeAuthStateKey).catch(() => undefined);
+              setMessage("Sign in was canceled. Nothing changed in Budgefi.");
+              setPhase("idle");
+            },
+          );
+        }, 500);
+      }).then((listenerHandle) => {
+        browserListener = listenerHandle;
+      });
+    void nativeSecureGet<NativeAuthCallback>(nativeAuthCallbackKey).then((callback) => {
+      if (callback) void finish(callback);
+    });
+    return () => {
+      window.removeEventListener("budgefi:auth-complete", listener);
+      window.removeEventListener("budgefi:auth-cancel", cancelListener);
+      if (closeTimer) clearTimeout(closeTimer);
+      void browserListener?.remove();
+    };
+  }, [finish]);
+
+  if (authLoaded && isSignedIn) return <Navigate to={returnTo} replace />;
+  const open = async () => {
+    setPhase("opening");
+    setMessage(null);
+    try {
+      const publicUrl = ((import.meta.env.VITE_NATIVE_AUTH_URL as string | undefined) ?? (import.meta.env.VITE_PUBLIC_APP_URL as string | undefined))?.trim();
+      if (!publicUrl?.startsWith("https://"))
+        throw new Error("Secure mobile sign in needs an HTTPS VITE_NATIVE_AUTH_URL.");
+      const state = randomState();
+      const createdAt = Date.now();
+      await nativeSecureSet(nativeAuthStateKey, {
+        state,
+        returnTo,
+        createdAt,
+        expiresAt: createdAt + nativeAuthPendingLifetimeMs,
+      } satisfies NativeAuthPending);
+      const url = new URL(publicUrl);
+      if (!import.meta.env.VITE_NATIVE_AUTH_URL) {
+        const basePath = url.pathname.endsWith("/") ? url.pathname : `${url.pathname}/`;
+        url.pathname = `${basePath}native-auth`.replace(/\/+/g, "/");
+      }
+      const authParams = new URLSearchParams({ state, mode: mode === "signup" ? "signup" : "signin" }).toString();
+      if (url.hash.startsWith("#/")) url.hash = `${url.hash.split("?", 1)[0]}?${authParams}`;
+      else url.search = authParams;
+      if (nativePlatform === "ios") {
+        const result = await SystemSession.open({
+          url: url.toString(),
+          callbackScheme: "budgefi",
+          prefersEphemeralSession: true,
+        });
+        const callback = new URL(result.callbackUrl);
+        window.dispatchEvent(new CustomEvent("budgefi:auth-complete", {
+          detail: {
+            state: callback.searchParams.get("state") ?? "",
+            ticket: callback.searchParams.get("ticket") ?? "",
+          },
+        }));
+      } else {
+        await Browser.open({ url: url.toString(), presentationStyle: "popover", toolbarColor: "#f3eedf" });
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Sign in could not open.");
+      setPhase("error");
+    }
+  };
+  const signup = mode === "signup";
+  return <AuthShell
+    title={signup ? "Create your account" : mode === "recovery" ? "Recover your account" : "Welcome back"}
+    intro={signup ? "Create your private Budgefi workspace, then set up your plan." : "Continue securely to your Budgefi plan."}
+  >
+    <div className="mt-7 rounded-[22px] border border-rule bg-white p-4">
+      <div className="flex items-start gap-3">
+        <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-pencil/8 text-pencil"><LockKeyhole className="size-5" /></span>
+        <div><strong className="text-sm">Sign in securely</strong><p className="mt-1 text-xs leading-5 text-muted">A protected window opens over Budgefi and closes when you finish.</p></div>
+      </div>
+      {message && <p role="alert" className="mt-3 rounded-2xl bg-coral/[.07] p-3 text-xs font-semibold leading-5 text-coral">{message}</p>}
+      <Button size="lg" className="mt-4 w-full" disabled={phase === "opening" || phase === "finishing"} onClick={() => void open()}>
+        {phase === "opening" ? "Opening…" : phase === "finishing" ? "Finishing sign in…" : signup ? "Create account" : mode === "recovery" ? "Recover account" : "Sign in"}
+      </Button>
+    </div>
+    <p className="mt-5 flex min-h-11 items-center justify-center text-center text-sm text-muted">
+      {signup ? "Already have an account?" : "New to Budgefi?"}{" "}
+      <Link className="-my-3 ml-1 flex min-h-11 items-center font-bold text-pencil" to={signup ? "/sign-in" : "/sign-up"}>{signup ? "Sign in" : "Create account"}</Link>
+    </p>
+  </AuthShell>;
+}
+
+export function NativeAuthHandoffPage() {
+  if (!clerkConfigured)
+    return <AuthShell title="Account sign in is unavailable" intro="Close this window and return to Budgefi."><p className="mt-6 rounded-2xl bg-coral/[.07] p-4 text-sm text-coral">Authentication is not configured on this environment.</p></AuthShell>;
+  return <ConfiguredNativeAuthHandoffPage />;
+}
+
+function ConfiguredNativeAuthHandoffPage() {
+  const { isLoaded, isSignedIn } = useAuth();
+  const [params] = useSearchParams();
+  const state = params.get("state") ?? "";
+  const signup = params.get("mode") === "signup";
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const sent = useRef(false);
+  const handoffUrl = new URL("/native-auth", window.location.origin);
+  handoffUrl.searchParams.set("state", state);
+  handoffUrl.searchParams.set("mode", signup ? "signup" : "signin");
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn || sent.current || !/^[A-Za-z0-9_-]{43,128}$/.test(state)) return;
+    sent.current = true;
+    void api.createNativeAuthTicket({ state }).then((result) => {
+      const callback = new URL("budgefi://open/auth-complete");
+      callback.searchParams.set("state", result.state);
+      callback.searchParams.set("ticket", result.ticket);
+      window.location.assign(callback.toString());
+    }).catch((reason) => {
+      sent.current = false;
+      setError(reason instanceof Error ? reason.message : "Budgefi could not finish sign in.");
+    });
+  }, [attempt, isLoaded, isSignedIn, state]);
+  if (!/^[A-Za-z0-9_-]{43,128}$/.test(state))
+    return <AuthShell title="This sign-in link is invalid" intro="Close this window and start again from the Budgefi app."><p className="mt-6 rounded-2xl bg-coral/[.07] p-4 text-sm text-coral">The secure return state is missing or malformed.</p></AuthShell>;
+  if (isSignedIn)
+    return <AuthShell title="Returning to Budgefi" intro="Your account is verified. This window will close automatically.">
+      {error ? (
+        <div role="alert" className="mt-6 rounded-2xl bg-coral/[.07] p-4 text-sm text-coral">
+          <p>{error}</p>
+          <Button
+            variant="outline"
+            className="mt-4 w-full bg-white"
+            onClick={() => {
+              sent.current = false;
+              setError(null);
+              setAttempt((value) => value + 1);
+            }}
+          >
+            Try returning again
+          </Button>
+        </div>
+      ) : (
+        <div className="mt-8 flex items-center gap-3 rounded-2xl border border-rule bg-white p-4"><span className="size-5 animate-spin rounded-full border-2 border-pencil/20 border-t-pencil"/><span className="text-sm font-semibold">Finishing secure sign in…</span></div>
+      )}
+      <a
+        className="mt-4 flex min-h-11 items-center justify-center text-sm font-semibold text-muted"
+        href={`budgefi://open/auth-cancel?state=${encodeURIComponent(state)}`}
+      >
+        Cancel and return to Budgefi
+      </a>
+    </AuthShell>;
+  return <AuthShell title={signup ? "Create your account" : "Welcome back"} intro="Finish here, then you will return directly to the Budgefi app.">
+    <div className="mt-7 flex justify-center">{signup ? <SignUp routing="path" path="/native-auth" forceRedirectUrl={handoffUrl.toString()} appearance={clerkAppearance}/> : <SignIn routing="path" path="/native-auth" forceRedirectUrl={handoffUrl.toString()} appearance={clerkAppearance}/>}</div>
+  </AuthShell>;
+}
+
+function randomState(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+const clerkAppearance = {
+  variables: {
+    colorPrimary: "#3155c6",
+    colorBackground: "#fffcf4",
+    borderRadius: "1rem",
+    fontFamily: "Instrument Sans, ui-sans-serif, system-ui, sans-serif",
+  },
+  elements: {
+    rootBox: "w-full",
+    cardBox: "w-full shadow-none",
+    card: "w-full border border-rule bg-white shadow-sheet",
+    formButtonPrimary:
+      "min-h-12 bg-pencil text-sm font-bold shadow-none hover:bg-pencil/90",
+    formFieldInput:
+      "min-h-12 rounded-xl border-rule bg-white shadow-none focus:border-pencil focus:ring-pencil",
+    socialButtonsBlockButton:
+      "min-h-12 rounded-xl border-rule bg-white shadow-none hover:bg-recessed/50",
+    footer: "bg-transparent",
+  },
+};
+
+function AuthShell({
+  title,
+  intro,
+  children,
+}: {
+  title: string;
+  intro: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="paper-grain min-h-dvh bg-paper sm:p-5">
+      <div className="native-app-shell mx-auto min-h-dvh max-w-[1040px] overflow-hidden sm:min-h-[calc(100dvh-40px)] sm:rounded-[28px] sm:border sm:border-rule sm:bg-sheet sm:shadow-card lg:grid lg:grid-cols-[.9fr_1.1fr]">
+        <section className="flex min-h-dvh flex-col px-5 pb-8 pt-4 sm:min-h-0 sm:px-8 lg:p-10">
+          <header className="flex h-12 items-center">
+            {isNativeApp ? (
+              <div className="size-11" />
+            ) : (
+              <Link
+                to="/"
+                className="grid size-11 place-items-center rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pencil"
+                aria-label="Back to landing"
+              >
+                <ArrowLeft className="size-5" />
+              </Link>
+            )}
+            <div className="mx-auto">
+              <Wordmark />
+            </div>
+            <div className="size-11" />
+          </header>
+          <main className="mx-auto flex w-full max-w-[430px] flex-1 flex-col justify-center py-7">
+            {title && (
+              <h1 className="text-[36px] font-bold leading-[1.02] tracking-[-.055em]">
+                {title}
+              </h1>
+            )}
+            {intro && <p className="mt-3 text-sm leading-6 text-muted">{intro}</p>}
+            {children}
+            <nav
+              className="mt-5 flex justify-center gap-5 text-xs text-muted"
+              aria-label="Legal"
+            >
+              <a className="flex min-h-11 items-center hover:text-ink" href="/privacy.html">
+                Privacy
+              </a>
+              <a className="flex min-h-11 items-center hover:text-ink" href="/terms.html">
+                Terms
+              </a>
+            </nav>
+          </main>
+        </section>
+        <aside className="relative hidden overflow-hidden bg-ink p-10 text-white lg:flex lg:flex-col lg:justify-between">
+          <img
+            src={editorialAsset("ledger-folios.png")}
+            alt=""
+            aria-hidden="true"
+            className="pointer-events-none absolute -right-10 -top-8 w-48 rotate-6 opacity-[.12] grayscale"
+          />
+          <div className="relative">
+            <p className="text-[10px] font-bold uppercase tracking-[.13em] text-citron">
+              Start your way
+            </p>
+            <h2 className="mt-3 max-w-[430px] text-[42px] font-bold leading-[1.02] tracking-[-.05em]">
+              Your money. Your choices.
+            </h2>
+            <p className="mt-4 max-w-[440px] text-sm leading-6 text-white/60">
+              Build the plan first. Add financial accounts only when you are
+              ready.
+            </p>
+          </div>
+          <div className="relative space-y-3">
+            <AuthProof
+              icon={LockKeyhole}
+              text="Your profile stays separate from bank connections"
+            />
+            <AuthProof icon={PenLine} text="Manual setup is always available" />
+            <AuthProof
+              icon={ShieldCheck}
+              text="Connected accounts remain read-only"
+            />
+            <AuthProof
+              icon={FileCheck2}
+              text="You choose what affects the plan"
+            />
+          </div>
+        </aside>
+      </div>
+    </div>
+  );
+}
+function AuthProof({
+  icon: Icon,
+  text,
+}: {
+  icon: typeof ShieldCheck;
+  text: string;
+}) {
+  return (
+    <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[.045] p-4">
+      <span className="grid size-10 place-items-center rounded-2xl bg-white/10 text-citron">
+        <Icon className="size-5" />
+      </span>
+      <span className="text-sm font-semibold">{text}</span>
+    </div>
+  );
+}

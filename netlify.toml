@@ -1,0 +1,187 @@
+[build]
+  command = "npm run build:netlify"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+[[redirects]]
+  from = "https://www.budgefi.com/*"
+  to = "https://budgefi.com/:splat"
+  status = 301
+  force = true
+
+# Only known client routes receive the SPA shell. Unknown paths fall through to
+# public/404.html and retain a real HTTP 404 response.
+[[redirects]]
+  from = "/sign-up"
+  to = "/index.html"
+  status = 200
+[[redirects]]
+  from = "/sign-up/*"
+  to = "/index.html"
+  status = 200
+[[redirects]]
+  from = "/sign-in"
+  to = "/index.html"
+  status = 200
+[[redirects]]
+  from = "/sign-in/*"
+  to = "/index.html"
+  status = 200
+[[redirects]]
+  from = "/forgot-password"
+  to = "/index.html"
+  status = 200
+[[redirects]]
+  from = "/forgot-password/*"
+  to = "/index.html"
+  status = 200
+[[redirects]]
+  from = "/native-auth"
+  to = "/index.html"
+  status = 200
+[[redirects]]
+  from = "/native-auth/*"
+  to = "/index.html"
+  status = 200
+[[redirects]]
+  from = "/today"
+  to = "/index.html"
+  status = 200
+[[redirects]]
+  from = "/review"
+  to = "/index.html"
+  status = 200
+[[redirects]]
+  from = "/review/*"
+  to = "/index.html"
+  status = 200
+[[redirects]]
+  from = "/plan"
+  to = "/index.html"
+  status = 200
+[[redirects]]
+  from = "/activity"
+  to = "/index.html"
+  status = 200
+[[redirects]]
+  from = "/more"
+  to = "/index.html"
+  status = 200
+[[redirects]]
+  from = "/onboarding"
+  to = "/index.html"
+  status = 200
+[[redirects]]
+  from = "/connections"
+  to = "/index.html"
+  status = 200
+[[redirects]]
+  from = "/open/plaid-oauth"
+  to = "/index.html"
+  status = 200
+[[redirects]]
+  from = "/manual"
+  to = "/index.html"
+  status = 200
+[[redirects]]
+  from = "/settings"
+  to = "/index.html"
+  status = 200
+[[redirects]]
+  from = "/settings/*"
+  to = "/index.html"
+  status = 200
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+    Permissions-Policy = "camera=(), geolocation=(), microphone=(), payment=()"
+
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/assets/editorial/*"
+  [headers.values]
+    Cache-Control = "public, max-age=3600, must-revalidate"
+
+[[headers]]
+  for = "/icons/*"
+  [headers.values]
+    Cache-Control = "public, max-age=86400"
+
+[[headers]]
+  for = "/.well-known/apple-app-site-association"
+  [headers.values]
+    Content-Type = "application/json"
+    Cache-Control = "public, max-age=3600"
+
+[[headers]]
+  for = "/.well-known/assetlinks.json"
+  [headers.values]
+    Content-Type = "application/json"
+    Cache-Control = "public, max-age=3600"
+
+[[headers]]
+  for = "/today"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"
+[[headers]]
+  for = "/review*"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"
+[[headers]]
+  for = "/plan"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"
+[[headers]]
+  for = "/activity"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"
+[[headers]]
+  for = "/more"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"
+[[headers]]
+  for = "/onboarding"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"
+[[headers]]
+  for = "/connections"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"
+[[headers]]
+  for = "/open/*"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"
+[[headers]]
+  for = "/manual"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"
+[[headers]]
+  for = "/settings*"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"
+[[headers]]
+  for = "/sign-*"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"
+[[headers]]
+  for = "/forgot-password"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"
+[[headers]]
+  for = "/native-auth"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"
+[[headers]]
+  for = "/native-auth/*"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"

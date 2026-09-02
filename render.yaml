@@ -1,0 +1,85 @@
+services:
+  - type: web
+    name: budgefi-api-staging
+    runtime: node
+    repo: https://github.com/mikeintech/budgefi
+    branch: main
+    region: virginia
+    plan: 0.5c-512mb
+    buildCommand: npm ci && npm run build:backend
+    startCommand: npm run start:api
+    healthCheckPath: /v1/health
+    maxShutdownDelaySeconds: 30
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: API_HOST
+        value: 0.0.0.0
+      - key: LOG_LEVEL
+        value: info
+      - key: DB_POOL_SIZE
+        value: "5"
+      - key: ALLOW_USER_PROVISIONING
+        value: "true"
+      - key: ALLOW_DEV_AUTH
+        value: "false"
+      - key: PLAID_ENABLED
+        value: "false"
+      - key: WEB_ORIGIN
+        value: https://budgefi.com,https://www.budgefi.com,http://localhost:4411,http://127.0.0.1:4411,http://10.0.0.17:4411
+      - key: CLERK_AUTHORIZED_PARTIES
+        value: https://budgefi.com,https://www.budgefi.com,http://localhost:4411,http://127.0.0.1:4411,http://10.0.0.17:4411,capacitor://localhost,https://localhost
+      - key: PUBLIC_APP_URL
+        value: https://budgefi.com
+      - key: RUNTIME_DATABASE_URL
+        sync: false
+      - key: CLERK_SECRET_KEY
+        sync: false
+      - key: CLERK_WEBHOOK_SIGNING_SECRET
+        sync: false
+      - key: NOTIFICATION_TOKEN_ENCRYPTION_KEY
+        sync: false
+      - key: NOTIFICATION_TOKEN_KEY_ID
+        value: notifications-staging-v1
+
+  - type: worker
+    name: budgefi-worker-staging
+    runtime: node
+    repo: https://github.com/mikeintech/budgefi
+    branch: main
+    region: virginia
+    plan: 0.5c-512mb
+    buildCommand: npm ci && npm run build:backend
+    startCommand: npm run start:worker
+    maxShutdownDelaySeconds: 60
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: info
+      - key: DB_POOL_SIZE
+        value: "3"
+      - key: WORKER_DATABASE_URL
+        sync: false
+      - key: CLERK_SECRET_KEY
+        sync: false
+      - key: NOTIFICATION_TOKEN_ENCRYPTION_KEY
+        sync: false
+      - key: NOTIFICATION_TOKEN_KEY_ID
+        value: notifications-staging-v1
+      - key: PUBLIC_APP_URL
+        value: https://budgefi.com
+      - key: APNS_ENV
+        value: sandbox
+
+databases:
+  - name: budgefi-postgres-staging
+    databaseName: budgefi
+    user: budgefi_migrator
+    region: virginia
+    plan: 0.5c-1g
+    postgresMajorVersion: "17"
+    diskSizeGB: 5
+    ipAllowList: []

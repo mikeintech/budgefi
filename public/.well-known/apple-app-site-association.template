@@ -1,0 +1,1 @@
+{"applinks":{"details":[{"appIDs":["${APPLE_TEAM_ID}.com.budgefi.app"],"components":[{"/":"/open/*"},{"/":"/today"},{"/":"/review*"},{"/":"/plan"},{"/":"/activity"},{"/":"/more"},{"/":"/connections*"},{"/":"/manual*"},{"/":"/settings*"}]}]}}

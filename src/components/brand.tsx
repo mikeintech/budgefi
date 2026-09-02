@@ -1,3 +1,34 @@
-import { cn } from '@/lib/utils'
-export function BudgefiMark({className}: {className?:string}) { return <svg viewBox="0 0 36 36" className={cn('size-8',className)} role="img" aria-label="Budgefi"><path fill="#3155c6" fillRule="evenodd" d="M5 3h10v10h6.5C29 13 34 17.5 34 24s-5 9-12.5 9H5V3Zm10 17.5V27h6.5c3.8 0 6.5-1.1 6.5-3.3 0-2.1-2.7-3.2-6.5-3.2H15Z"/><path fill="#5574d7" d="M5 3h10v10L5 18V3Z"/><path fill="#fffcf4" d="m15 13 5.2 7.5H15V13Z"/></svg> }
-export function Wordmark({compact=false}:{compact?:boolean}) { return <div className="flex min-w-0 items-center gap-2"><BudgefiMark className="size-[30px] shrink-0"/><span className={cn('text-[21px] font-bold leading-none tracking-[-.045em]',compact&&'hidden min-[360px]:inline')}>budgefi</span></div> }
+import { cn } from "@/lib/utils";
+import budgefiMarkUrl from "../../assets/brand/budgefi-mark.svg";
+
+export function BudgefiMark({
+  className,
+  decorative = false,
+}: {
+  className?: string;
+  decorative?: boolean;
+}) {
+  return (
+    <img
+      src={budgefiMarkUrl}
+      className={cn("size-8", className)}
+      alt={decorative ? "" : "Budgefi"}
+    />
+  );
+}
+
+export function Wordmark({ compact = false }: { compact?: boolean }) {
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      <BudgefiMark className="size-[30px] shrink-0" decorative />
+      <span
+        className={cn(
+          "text-[21px] font-bold leading-none tracking-[-.045em]",
+          compact && "hidden min-[360px]:inline",
+        )}
+      >
+        budgefi
+      </span>
+    </div>
+  );
+}

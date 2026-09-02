@@ -16,7 +16,10 @@
     "noEmit": true,
     "jsx": "react-jsx",
     "baseUrl": ".",
-    "paths": { "@/*": ["./src/*"] }
+    "paths": {
+      "@/*": ["./src/*"],
+      "@budgefi/contracts": ["./packages/contracts/src/index.ts"]
+    }
   },
   "include": ["src"]
 }

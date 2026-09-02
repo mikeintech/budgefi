@@ -1,0 +1,66 @@
+name: Budgefi verification
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: budgefi_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d budgefi_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/budgefi_ci
+      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/budgefi_ci
+      RUNTIME_DATABASE_URL: postgresql://budgefi_runtime:integration-runtime-password-000000000001@127.0.0.1:5432/budgefi_ci
+      WORKER_DATABASE_URL: postgresql://budgefi_worker_runtime:integration-worker-password-0000000000002@127.0.0.1:5432/budgefi_ci
+      PLAID_WORKER_DATABASE_URL: postgresql://budgefi_plaid_worker_runtime:integration-plaid-worker-password-0000000003@127.0.0.1:5432/budgefi_ci
+      ALLOW_DEV_AUTH: "true"
+      ALLOW_USER_PROVISIONING: "true"
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run brand:check
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm run db:migrate
+      - run: npm run db:bootstrap-runtime-roles
+      - run: npm run db:seed
+      - run: npm run start:worker:once
+        env:
+          NODE_ENV: production
+          NOTIFICATION_TOKEN_ENCRYPTION_KEY: CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCws=
+          NOTIFICATION_TOKEN_KEY_ID: ci-notifications-v1
+      - run: npm run start:plaid-worker
+        env:
+          NODE_ENV: production
+          PLAID_ENABLED: "true"
+          PLAID_ENV: production
+          PLAID_CLIENT_ID: ci-client
+          PLAID_SECRET: ci-secret
+          PLAID_ACTIVE_TOKEN_KEY_ID: ci-v1
+          PLAID_TOKEN_KEYS: '{"ci-v1":"DQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0="}'
+          PLAID_JOB_MAX_ITEMS: "10"
+          PLAID_JOB_MAX_RUNTIME_MS: "10000"
+      - run: npm run test:integration:direct
