@@ -16,7 +16,7 @@ type CommitmentDateFields<TCustom extends DatedCustomCommitment> = {
 export function withSuggestedCommitmentDates<
   TCustom extends DatedCustomCommitment,
   TPlan extends CommitmentDateFields<TCustom>,
->(value: TPlan, horizonStart: string, horizonEnd: string): TPlan {
+>(value: TPlan, horizonStart: string, _horizonEnd: string): TPlan {
   return {
     ...value,
     rentDueDate: value.rentDueDate || nextMonthlyDate(horizonStart, 1),
@@ -26,8 +26,6 @@ export function withSuggestedCommitmentDates<
       value.streamBoxDueDate || nextMonthlyDate(horizonStart, 15),
     insuranceDueDate:
       value.insuranceDueDate || nextMonthlyDate(horizonStart, 20),
-    customCommitments: value.customCommitments.map((item) =>
-      item.amount > 0 && !item.dueDate ? { ...item, dueDate: horizonEnd } : item,
-    ),
+    customCommitments: value.customCommitments,
   };
 }

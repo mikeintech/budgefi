@@ -111,6 +111,12 @@ function validPlanDraft(
     ) &&
     typeof plan.incomeConfirmed === "boolean" &&
     [
+      plan.rentName,
+      plan.electricName,
+      plan.streamBoxName,
+      plan.insuranceName,
+    ].every((item) => item === undefined || typeof item === "string") &&
+    [
       plan.nextIncomeDate,
       plan.rentDueDate,
       plan.electricDueDate,

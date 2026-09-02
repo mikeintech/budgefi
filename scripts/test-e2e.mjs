@@ -252,14 +252,22 @@ try {
   await page.goto(`${baseUrl}/plan`, { waitUntil: "networkidle" });
   await page.getByText("Phone bill", { exact: true }).waitFor();
   await page.getByRole("button", { name: "Edit Phone bill" }).click();
+  await page.getByLabel("Name").fill("Mobile phone");
   await page.getByLabel("Expected amount").fill("90.12");
   await page.getByLabel("Due date").fill("2026-09-09");
   await page.getByRole("button", { name: "Save commitment" }).click();
+  await page.getByText("Mobile phone", { exact: true }).waitFor();
   await page.getByText("$90.12", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await page.getByLabel("Name").fill("Flexible goal");
+  await page.locator("#new-commitment-amount").fill("25");
+  await page.getByRole("button", { name: "Add commitment" }).click();
+  await page.getByText("Flexible goal", { exact: true }).waitFor();
+  await page.getByText("Not reserved · add a due date", { exact: false }).waitFor();
   await page.goto(`${baseUrl}/activity`, { waitUntil: "networkidle" });
   await page.getByRole("tab", { name: "Upcoming" }).click();
   const phoneUpcoming = page
-    .getByText("Phone bill", { exact: true })
+    .getByText("Mobile phone", { exact: true })
     .locator("..");
   await phoneUpcoming.waitFor();
   await phoneUpcoming.getByText("Sep 9", { exact: false }).waitFor();

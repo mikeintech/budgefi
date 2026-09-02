@@ -240,7 +240,7 @@ export function ManualEntryPage() {
                 Add an upcoming commitment
               </h2>
               <p className="text-xs leading-5 text-muted">
-                Reserve money before calling it available to use.
+                Track it now; add a date when you want the plan to reserve it.
               </p>
             </div>
           </div>
@@ -274,7 +274,7 @@ export function ManualEntryPage() {
               className="block text-xs font-semibold"
               htmlFor="manual-commitment-date"
             >
-              Due date
+              Due date <span className="font-normal text-muted">(optional)</span>
               <input
                 id="manual-commitment-date"
                 type="date"
@@ -293,8 +293,7 @@ export function ManualEntryPage() {
             disabled={
               saving !== null ||
               !commitment.trim() ||
-              commitmentAmount <= 0 ||
-              !commitmentDate
+              commitmentAmount <= 0
             }
             onClick={() => void saveCommitment()}
           >

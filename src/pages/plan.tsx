@@ -1,9 +1,8 @@
-import { Link } from "react-router-dom";
 import { CalendarRange, ChevronRight, CloudOff, House, ShoppingBag, Tv, Zap } from "lucide-react";
 import { MobileShell, HealthSheet } from "@/components/layout";
 import { CommitmentEditor } from "@/components/commitment-editor";
+import { CommitmentCreateSheet } from "@/components/commitment-create-sheet";
 import { MoneySummary } from "@/components/money-summary";
-import { Button } from "@/components/ui/button";
 import { useAppState } from "@/state/app-state";
 import { money } from "@/lib/utils";
 
@@ -36,7 +35,7 @@ export function PlanPage() {
         <section className="mt-7" aria-labelledby="commitments-heading">
           <div className="mb-3 flex items-end justify-between">
             <div><p className="eyebrow">Already accounted for</p><h2 id="commitments-heading" className="text-xl font-bold">Commitments</h2></div>
-            <span className="text-xs font-semibold text-muted">{commitments.length} items</span>
+            <CommitmentCreateSheet />
           </div>
           <div className="divide-y divide-ink/8 overflow-hidden rounded-[22px] border border-ink/10 bg-white">
             {commitments.map(({ item, icon: Icon, title, date, amount, note }) => (
@@ -46,7 +45,7 @@ export function PlanPage() {
                 <span className="shrink-0 text-right"><span className="block text-sm font-bold tabular-nums">{amount}</span><CommitmentEditor item={item}/></span>
               </div>
             ))}
-            {commitments.length===0&&<div className="p-5 text-center"><strong className="block text-sm">No active commitments</strong><p className="mt-1 text-xs leading-5 text-muted">Add a dated bill in the manual workspace so the plan can reserve it.</p><Button asChild variant="outline" className="mt-3"><Link to="/manual">Add commitment</Link></Button></div>}
+            {commitments.length===0&&<div className="p-5 text-center"><strong className="block text-sm">No active commitments</strong><p className="mt-1 text-xs leading-5 text-muted">Add a bill, subscription, or obligation for Budgefi to track.</p></div>}
           </div>
         </section>
 

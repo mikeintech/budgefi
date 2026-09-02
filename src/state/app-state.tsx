@@ -64,12 +64,16 @@ export type PlanCalibrationData = {
   incomeFrequency: IncomeFrequency;
   nextIncomeDate: string;
   incomeConfirmed: boolean;
+  rentName: string;
   rentAmount: number;
   rentDueDate: string;
+  electricName: string;
   electricMax: number;
   electricDueDate: string;
+  streamBoxName: string;
   streamBoxAmount: number;
   streamBoxDueDate: string;
+  insuranceName: string;
   insuranceAmount: number;
   insuranceDueDate: string;
   editedCommitments: string[];
@@ -86,12 +90,16 @@ export const defaultCalibration: PlanCalibrationData = {
   incomeFrequency: "biweekly",
   nextIncomeDate: "",
   incomeConfirmed: false,
+  rentName: "Rent",
   rentAmount: 0,
   rentDueDate: "",
+  electricName: "Electric",
   electricMax: 0,
   electricDueDate: "",
+  streamBoxName: "Subscriptions",
   streamBoxAmount: 0,
   streamBoxDueDate: "",
+  insuranceName: "Insurance",
   insuranceAmount: 0,
   insuranceDueDate: "",
   editedCommitments: [],
@@ -346,16 +354,20 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           account.provenance === "plaid",
       ),
       includeJoint: false,
+      rentName: "Rent",
       rentAmount: named.get("rent") ?? 0,
       rentDueDate: namedCommitments.get("rent")?.dueDate ?? "",
+      electricName: "Electric",
       electricMax: named.get("electric") ?? 0,
       electricDueDate: namedCommitments.get("electric")?.dueDate ?? "",
+      streamBoxName: "Subscriptions",
       streamBoxAmount:
         named.get("subscriptions") ?? named.get("streambox") ?? 0,
       streamBoxDueDate:
         namedCommitments.get("subscriptions")?.dueDate ??
         namedCommitments.get("streambox")?.dueDate ??
         "",
+      insuranceName: "Insurance",
       insuranceAmount: named.get("insurance") ?? 0,
       insuranceDueDate: namedCommitments.get("insurance")?.dueDate ?? "",
       customCommitments: bootstrap.plan.commitments
@@ -641,14 +653,21 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     };
     const commitments = [
       ...(value.rentAmount > 0
-        ? [commitment("Rent", value.rentAmount, undefined, value.rentDueDate)]
+        ? [
+            commitment(
+              value.rentName.trim(),
+              value.rentAmount,
+              commitmentRef.current.get("rent")?.id,
+              value.rentDueDate,
+            ),
+          ]
         : []),
       ...(value.electricMax > 0
         ? [
             commitment(
-              "Electric",
+              value.electricName.trim(),
               value.electricMax,
-              undefined,
+              commitmentRef.current.get("electric")?.id,
               value.electricDueDate,
             ),
           ]
@@ -656,9 +675,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       ...(value.streamBoxAmount > 0
         ? [
             commitment(
-              "Subscriptions",
+              value.streamBoxName.trim(),
               value.streamBoxAmount,
-              undefined,
+              commitmentRef.current.get("subscriptions")?.id ??
+                commitmentRef.current.get("streambox")?.id,
               value.streamBoxDueDate,
             ),
           ]
@@ -666,9 +686,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       ...(value.insuranceAmount > 0
         ? [
             commitment(
-              "Insurance",
+              value.insuranceName.trim(),
               value.insuranceAmount,
-              undefined,
+              commitmentRef.current.get("insurance")?.id,
               value.insuranceDueDate,
             ),
           ]
@@ -870,7 +890,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       api.addCommitment({
         name: name.trim(),
         amount: toApiMoney(Math.max(0, amount)),
-        dueDate,
+        dueDate: dueDate || null,
         requestId: id,
       }),
     );

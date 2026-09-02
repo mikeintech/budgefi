@@ -32,4 +32,17 @@ describe("commitment setup suggestions", () => {
 
     expect(result.rentDueDate).toBe("2026-09-07");
   });
+
+  it("preserves an intentionally undated custom commitment", () => {
+    const result = withSuggestedCommitmentDates(
+      {
+        ...blankPlan,
+        customCommitments: [{ amount: 25, dueDate: "" }],
+      },
+      "2026-09-01",
+      "2026-09-30",
+    );
+
+    expect(result.customCommitments[0]?.dueDate).toBe("");
+  });
 });

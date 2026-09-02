@@ -113,15 +113,25 @@ export function PlanCalibration({
     state.authoritativeProjection.horizonEnd,
   );
   const customInvalid = draft.customCommitments.some(
-    (item) => !item.name.trim() || item.amount <= 0 || !item.dueDate,
+    (item) => !item.name.trim() || item.amount <= 0,
   );
-  const commitmentInvalid = customInvalid || fixedCommitmentDatesMissing(draft);
+  const fixedCommitments = [
+    { name: draft.rentName, amount: draft.rentAmount, date: draft.rentDueDate },
+    { name: draft.electricName, amount: draft.electricMax, date: draft.electricDueDate },
+    { name: draft.streamBoxName, amount: draft.streamBoxAmount, date: draft.streamBoxDueDate },
+    { name: draft.insuranceName, amount: draft.insuranceAmount, date: draft.insuranceDueDate },
+  ];
+  const activeNames = [
+    ...fixedCommitments.filter((item) => item.amount > 0).map((item) => item.name.trim().toLocaleLowerCase()),
+    ...draft.customCommitments.filter((item) => item.amount > 0).map((item) => item.name.trim().toLocaleLowerCase()),
+  ];
+  const commitmentInvalid =
+    customInvalid ||
+    fixedCommitments.some((item) => item.amount > 0 && !item.name.trim()) ||
+    new Set(activeNames).size !== activeNames.length;
   const hasDatedCommitments =
-    draft.rentAmount > 0 ||
-    draft.electricMax > 0 ||
-    draft.streamBoxAmount > 0 ||
-    draft.insuranceAmount > 0 ||
-    draft.customCommitments.some((item) => item.amount > 0);
+    fixedCommitments.some((item) => item.amount > 0 && Boolean(item.date)) ||
+    draft.customCommitments.some((item) => item.amount > 0 && Boolean(item.dueDate));
   useEffect(() => {
     onDraftChange?.(draft, buffer);
   }, [draft, buffer, onDraftChange]);
@@ -299,8 +309,8 @@ export function PlanCalibration({
         )}
       {stage === 2 && commitmentInvalid && (
         <p className="mt-2 text-center text-xs text-coral">
-          Every nonzero commitment needs a name, amount, and due date—or set it
-          to $0 or remove it.
+          Every commitment needs a unique name and an amount—or set it to $0
+          or remove it. Due dates may be added later.
         </p>
       )}
       {stage === 2 &&
@@ -665,12 +675,15 @@ function Commitments({
   const savedNames = new Set(
     commitments.map((item) => item.name.toLocaleLowerCase()),
   );
-  const items: [FixedAmountKey, FixedDateKey, string, string][] = [
-    ["rentAmount", "rentDueDate", "Rent", "rent"],
-    ["electricMax", "electricDueDate", "Electric maximum", "electric"],
-    ["streamBoxAmount", "streamBoxDueDate", "Subscriptions", "streambox"],
-    ["insuranceAmount", "insuranceDueDate", "Insurance", "insurance"],
+  const items: [FixedNameKey, FixedAmountKey, FixedDateKey, string, string][] = [
+    ["rentName", "rentAmount", "rentDueDate", "Rent", "rent"],
+    ["electricName", "electricMax", "electricDueDate", "Electric", "electric"],
+    ["streamBoxName", "streamBoxAmount", "streamBoxDueDate", "Subscriptions", "streambox"],
+    ["insuranceName", "insuranceAmount", "insuranceDueDate", "Insurance", "insurance"],
   ];
+  const updateName = (key: FixedNameKey, name: string) => {
+    setDraft((value) => ({ ...value, [key]: name }));
+  };
   const update = (key: FixedAmountKey, raw: number) => {
     setDatesReviewed(false);
     setDraft((value) => {
@@ -746,11 +759,14 @@ function Commitments({
         amounts stay intact; new amounts remain $0 until you enter them.
       </p>
       <div className="mt-5 space-y-2">
-        {items.map(([amountKey, dateKey, name, canonicalName]) => {
+        {items.map(([nameKey, amountKey, dateKey, suggestedName, canonicalName]) => {
+          const name = draft[nameKey];
           const source =
             manual || draft.editedCommitments.includes(amountKey)
               ? "You entered"
-              : savedNames.has(canonicalName)
+              : savedNames.has(canonicalName) ||
+                  (amountKey === "streamBoxAmount" &&
+                    savedNames.has("subscriptions"))
                 ? "Saved commitment"
                 : "Suggested setup";
           return (
@@ -759,7 +775,13 @@ function Commitments({
               className="rounded-[18px] border border-rule bg-white p-3"
             >
               <div className="flex items-center justify-between gap-3">
-                <strong className="text-sm">{name}</strong>
+                <input
+                  aria-label={`${suggestedName} commitment name`}
+                  value={name}
+                  maxLength={120}
+                  onChange={(event) => updateName(nameKey, event.target.value)}
+                  className="h-10 min-w-0 flex-1 rounded-xl border border-rule bg-white px-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-pencil"
+                />
                 <span className="text-[10px] font-semibold text-muted">
                   {source}
                 </span>
@@ -768,7 +790,7 @@ function Commitments({
                 <div className="flex h-11 items-center rounded-xl border border-rule px-2 focus-within:ring-2 focus-within:ring-pencil">
                   <span className="text-sm text-muted">$</span>
                   <NumberInput
-                    aria-label={`${name} amount`}
+                    aria-label={`${name || suggestedName} amount`}
                     min={0}
                     step="0.01"
                     value={draft[amountKey]}
@@ -777,7 +799,7 @@ function Commitments({
                   />
                 </div>
                 <input
-                  aria-label={`${name} due date`}
+                  aria-label={`${name || suggestedName} due date`}
                   type="date"
                   value={draft[dateKey]}
                   onChange={(event) => updateDate(dateKey, event.target.value)}
@@ -785,8 +807,8 @@ function Commitments({
                 />
               </div>
               {draft[amountKey] > 0 && !draft[dateKey] && (
-                <p className="mt-2 text-[11px] font-semibold text-coral">
-                  Add the date this needs to be paid.
+                <p className="mt-2 text-[11px] font-semibold text-muted">
+                  Tracked, but not reserved until you add a due date.
                 </p>
               )}
             </div>
@@ -795,7 +817,8 @@ function Commitments({
       </div>
       <p className="mt-3 rounded-2xl bg-recessed p-3 text-[11px] leading-4 text-muted">
         Dates are suggested starting points, not detected facts. Change them to
-        match your bills. Rows left at $0 are not saved as commitments.
+        match your bills, or clear a date to track something without reserving
+        it yet. Rows left at $0 are not saved as commitments.
       </p>
       {requireDateReview && total > 0 && (
         <label className="mt-3 flex min-h-14 cursor-pointer items-center justify-between gap-3 rounded-2xl border border-pencil/15 bg-pencil/[.035] px-4">
@@ -828,6 +851,7 @@ function Commitments({
                 updateCustom(item.id, { name: event.target.value })
               }
               placeholder="Phone bill"
+              maxLength={120}
               className="h-11 min-w-0 rounded-xl border border-rule px-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-pencil"
             />
             <button
@@ -860,6 +884,11 @@ function Commitments({
               className="h-11 min-w-0 rounded-xl border border-rule px-2 text-sm outline-none focus:ring-2 focus:ring-pencil"
             />
           </div>
+          {item.amount > 0 && !item.dueDate && (
+            <p className="mt-2 text-[11px] font-semibold text-muted">
+              Tracked, but not reserved until you add a due date.
+            </p>
+          )}
         </div>
       ))}
       <Button
@@ -892,6 +921,11 @@ type FixedAmountKey =
   | "electricMax"
   | "streamBoxAmount"
   | "insuranceAmount";
+type FixedNameKey =
+  | "rentName"
+  | "electricName"
+  | "streamBoxName"
+  | "insuranceName";
 type FixedDateKey =
   | "rentDueDate"
   | "electricDueDate"
@@ -909,16 +943,6 @@ const fixedPreferredDays: Record<FixedDateKey, number> = {
   streamBoxDueDate: 15,
   insuranceDueDate: 20,
 };
-function fixedCommitmentDatesMissing(draft: PlanCalibrationData) {
-  return (
-    [
-      ["rentAmount", "rentDueDate"],
-      ["electricMax", "electricDueDate"],
-      ["streamBoxAmount", "streamBoxDueDate"],
-      ["insuranceAmount", "insuranceDueDate"],
-    ] as [FixedAmountKey, FixedDateKey][]
-  ).some(([amount, date]) => draft[amount] > 0 && !draft[date]);
-}
 function mergeCalibrationDraft(
   canonical: PlanCalibrationData,
   stored: PlanCalibrationData,

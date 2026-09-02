@@ -135,6 +135,26 @@ describe("Budgefi API with PostgreSQL", () => {
     expect(conflicting.statusCode).toBe(409);
   });
 
+  it("tracks an undated commitment without reserving it", async () => {
+    const created = await inject(
+      "POST",
+      "/v1/commitments",
+      {
+        name: "Flexible goal",
+        amount: { minor: "2500", currency: "USD" },
+        dueDate: null,
+        requestId: uuidv7(),
+      },
+      "dev|maya",
+    );
+    expect(created.statusCode).toBe(201);
+    const body = bootstrapResponseSchema.parse(created.json());
+    expect(
+      body.plan.commitments.find((item) => item.name === "Flexible goal")
+        ?.dueDate,
+    ).toBeNull();
+  });
+
   it("rejects unknown fields and invalid money at the contract boundary", async () => {
     const response = await inject("POST", "/v1/commitments", { name: "Bad", amount: { minor: "1.25", currency: "USD" }, dueDate: null, requestId: uuidv7(), surprise: true }, "dev|maya");
     expect(response.statusCode).toBe(400);
@@ -226,18 +246,23 @@ describe("Budgefi API with PostgreSQL", () => {
 
   it("calibrates cash, guardrails and editable commitments atomically", async () => {
     const before = bootstrapResponseSchema.parse((await inject("GET", "/v1/bootstrap", undefined, "dev|maya")).json());
+    const electricBefore = before.plan.commitments.find((item) => item.name === "Electric");
+    expect(electricBefore).toBeDefined();
     const requestId = uuidv7();
     const payload = {
       expectedVersion: before.plan.version,
       manualBalance: { accountId: ids.accountA, amount: { minor: "450000", currency: "USD" }, asOf: new Date().toISOString() },
       plannedSavings: { minor: "60000", currency: "USD" }, safetyBuffer: { minor: "30000", currency: "USD" },
-      commitments: before.plan.commitments.map((item) => ({ id: item.id, expectedVersion: item.version, name: item.name, amount: item.name === "Electric" ? { minor: "17000", currency: "USD" } : item.amount, dueDate: item.dueDate })), removeCommitments: [], requestId,
+      commitments: before.plan.commitments.map((item) => ({ id: item.id, expectedVersion: item.version, name: item.name === "Electric" ? "Power bill" : item.name, amount: item.name === "Electric" ? { minor: "17000", currency: "USD" } : item.amount, dueDate: item.dueDate })), removeCommitments: [], requestId,
     } as const;
     const saved = bootstrapResponseSchema.parse((await inject("PUT", "/v1/plan/calibration", payload, "dev|maya")).json());
     expect(saved.plan.knownCash.minor).toBe("450000");
     expect(saved.plan.plannedSavings.minor).toBe("60000");
     expect(saved.plan.safetyBuffer.minor).toBe("30000");
-    expect(saved.plan.commitments.find((item) => item.name === "Electric")?.amount.minor).toBe("17000");
+    const renamed = saved.plan.commitments.find((item) => item.name === "Power bill");
+    expect(renamed?.id).toBe(electricBefore?.id);
+    expect(renamed?.amount.minor).toBe("17000");
+    expect(saved.plan.commitments.some((item) => item.name === "Electric")).toBe(false);
     expect(BigInt(saved.revision)).toBe(BigInt(before.revision) + 1n);
     const retry = bootstrapResponseSchema.parse((await inject("PUT", "/v1/plan/calibration", payload, "dev|maya")).json());
     expect(retry.revision).toBe(saved.revision);
