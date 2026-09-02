@@ -363,7 +363,7 @@ function ClerkPublicSession() {
     <div className="flex items-center gap-2">
       <Link
         to="/today"
-        className="hidden min-h-11 items-center px-2 text-sm font-bold text-pencil sm:flex"
+        className="flex min-h-11 items-center px-2 text-sm font-bold text-pencil"
       >
         Open app
       </Link>

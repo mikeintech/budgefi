@@ -1,8 +1,10 @@
 import { lazy, Suspense, useEffect } from "react";
+import { useAuth } from "@clerk/react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { Wordmark } from "@/components/brand";
 import { AppErrorBoundary } from "@/components/app-error-boundary";
 import { ProtectedRoute } from "@/components/protected-route";
+import { clerkConfigured } from "@/lib/auth";
 import { isNativeApp } from "@/lib/platform";
 
 const LandingPage = lazyNamed(() => import("@/pages/landing"), "LandingPage");
@@ -65,9 +67,7 @@ export default function App() {
         <Routes>
           <Route
             path="/"
-            element={
-              isNativeApp ? <Navigate to="/today" replace /> : <LandingPage />
-            }
+            element={<HomeRoute />}
           />
           <Route path="/sign-up/*" element={<SignUpPage />} />
           <Route path="/sign-in/*" element={<SignInPage />} />
@@ -174,6 +174,20 @@ export default function App() {
       </Suspense>
     </AppErrorBoundary>
   );
+}
+
+function HomeRoute() {
+  if (isNativeApp) return <Navigate to="/today" replace />;
+  if (!clerkConfigured) return <LandingPage />;
+  return <AuthenticatedHomeRoute />;
+}
+
+function AuthenticatedHomeRoute() {
+  const { isLoaded, isSignedIn } = useAuth();
+
+  if (!isLoaded) return <RouteLoading />;
+  if (isSignedIn) return <Navigate to="/today" replace />;
+  return <LandingPage />;
 }
 
 function Protected({ children }: { children: React.ReactNode }) {
