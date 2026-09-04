@@ -53,6 +53,7 @@ describe("fresh PostgreSQL migration and seed", () => {
       "034_commitment_slots_and_explicit_skips.sql",
       "035_common_bill_starters_and_available_cash_alerts.sql",
       "036_restart_onboarding_for_active_memberships.sql",
+      "037_restart_onboarding_rls_safe.sql",
     ]);
     expect(
       applied.rows.every((row) => /^[a-f0-9]{64}$/.test(row.checksum)),
@@ -1042,7 +1043,7 @@ describe("fresh PostgreSQL migration and seed", () => {
           "select min(data_revision)::int minimum,max(data_revision)::int maximum from households where id::text like '22000000-%'",
         )
       ).rows[0],
-    ).toEqual({ minimum: 3, maximum: 3 });
+    ).toEqual({ minimum: 4, maximum: 4 });
   });
 
   it("bootstraps separate least-privilege production login roles", async () => {
