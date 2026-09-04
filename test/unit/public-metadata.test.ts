@@ -36,6 +36,9 @@ describe("public discovery and brand surface", () => {
     expect(config).not.toContain('from = "/*"');
     expect(config).toContain('from = "/review/*"');
     expect(config).toContain('from = "/settings/*"');
+    expect(config).toContain('from = "/category-rules"');
+    expect(config).toContain('from = "/pay-cycles"');
+    expect(config).toContain('from = "/pay-cycles/*"');
     expect(config).toContain('X-Robots-Tag = "noindex, nofollow"');
     expect(read("public/404.html")).toContain('name="robots" content="noindex, nofollow"');
   });
