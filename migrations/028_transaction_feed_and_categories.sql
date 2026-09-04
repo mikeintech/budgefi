@@ -32,6 +32,12 @@ CREATE TABLE transaction_source_aliases (
 
 ALTER TABLE financial_transactions ADD COLUMN transaction_id uuid;
 
+-- Production migrations run as the table owner without BYPASSRLS. Temporarily
+-- lift FORCE RLS inside this migration transaction so the owner can see and
+-- backfill every household's historical evidence. Any failure rolls this
+-- change back with the rest of the migration.
+ALTER TABLE financial_transactions NO FORCE ROW LEVEL SECURITY;
+
 -- Record exactly which verified occurrence caused a one-time rule settlement
 -- or payday advance. Undo can then reverse only its own consequence and will
 -- never overwrite a later user edit.
@@ -210,6 +216,8 @@ INSERT INTO transaction_category_revisions(
 )
 SELECT household_id,transaction_id,category,source,confidence,version,'Initial category backfill'
 FROM transaction_category_assignments;
+
+ALTER TABLE financial_transactions FORCE ROW LEVEL SECURITY;
 
 CREATE TRIGGER transaction_category_revisions_append_only
   BEFORE UPDATE OR DELETE ON transaction_category_revisions
