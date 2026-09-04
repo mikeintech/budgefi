@@ -115,7 +115,7 @@ export class InsightsService {
     const surfaced =
       suggestions.commitments.length +
       suggestions.needsReview.length +
-      Number(Boolean(suggestions.income)) +
+      suggestions.incomes.length +
       Number(Boolean(suggestions.savings));
     const response = onboardingAnalysisResponseSchema.parse({
       state: surfaced ? "ready" : "not_enough_history",
@@ -304,7 +304,10 @@ function buildSuggestions(
       classification.kind === "bill" ||
       classification.kind === "subscription"
     ) {
-      if (strong) commitments.push(suggestion);
+      // Commitments do not support twice-monthly schedules yet. Keep these
+      // visible for explicit review instead of silently saving them monthly.
+      if (strong && suggestion.cadence !== "semi_monthly")
+        commitments.push(suggestion);
       else needsReview.push(suggestion);
     } else {
       ordinary.push({
@@ -321,18 +324,20 @@ function buildSuggestions(
   }
   incomes.sort(compareSuggestions);
   savings.sort(compareSuggestions);
-  const income = incomes.find((item) => item.confidence === "strong") ?? null;
+  const strongIncomes = incomes
+    .filter((item) => item.confidence === "strong")
+    .slice(0, 12);
   const savingsSuggestion =
     savings.find(
       (item) =>
         item.confidence === "strong" && item.nextExpectedDate <= horizonEnd,
     ) ?? null;
   needsReview.push(
-    ...incomes.filter((item) => item !== income),
+    ...incomes.filter((item) => !strongIncomes.includes(item)),
     ...savings.filter((item) => item.confidence === "review"),
   );
   return {
-    income,
+    incomes: strongIncomes,
     commitments: commitments.sort(compareSuggestions),
     savings: savingsSuggestion,
     needsReview: needsReview.sort(compareSuggestions).slice(0, 20),
@@ -479,7 +484,7 @@ function emptyResponse(
     candidateCount: 0,
     notice,
     suggestions: {
-      income: null,
+      incomes: [],
       commitments: [],
       savings: null,
       needsReview: [],

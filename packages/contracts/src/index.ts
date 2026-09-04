@@ -41,9 +41,42 @@ export const planResponseSchema = z
     id: uuidSchema,
     householdId: uuidSchema,
     version: z.number().int().positive(),
-    planningHorizonDays: z.number().int().positive(),
+    planningHorizonDays: z.number().int().nonnegative(),
+    fallbackHorizonDays: z.number().int().min(1).max(90),
+    horizonBasis: z.enum(["expected_income", "fallback"]),
+    horizonMissedIncome: z.boolean(),
     horizonStart: dateSchema,
     horizonEnd: dateSchema,
+    horizonIncomeScheduleId: uuidSchema.nullable(),
+    incomeSchedules: z.array(
+      z
+        .object({
+          id: uuidSchema,
+          version: z.number().int().positive(),
+          destinationAccountId: uuidSchema.nullable(),
+          name: z.string().min(1).max(120),
+          expectedAmount: positiveMoneySchema.nullable(),
+          frequency: z.enum([
+            "weekly",
+            "biweekly",
+            "semi_monthly",
+            "monthly",
+            "quarterly",
+            "annual",
+            "irregular",
+          ]),
+          nextExpectedDate: dateSchema.nullable(),
+          confirmed: z.boolean(),
+          status: z.enum(["active", "paused", "archived"]),
+          anchorDay: z.number().int().min(1).max(31).nullable(),
+          anchorEndOfMonth: z.boolean(),
+          secondAnchorDay: z.number().int().min(1).max(31).nullable(),
+          secondAnchorEndOfMonth: z.boolean(),
+          reviewReason: z.enum(["destination_disconnected"]).nullable(),
+          provenance: z.enum(["manual", "csv", "plaid", "derived"]),
+        })
+        .strict(),
+    ),
     knownCash: moneySchema,
     commitments: z.array(
       z
@@ -53,7 +86,173 @@ export const planResponseSchema = z
           name: z.string(),
           amount: moneySchema,
           dueDate: dateSchema.nullable(),
+          recurrence: z.enum([
+            "one_time",
+            "weekly",
+            "biweekly",
+            "monthly",
+            "quarterly",
+            "annual",
+          ]),
+          setupSlot: z
+            .enum(["housing", "utilities", "subscriptions", "insurance"])
+            .nullable(),
+          starterItemKey: z
+            .enum([
+              "housing",
+              "utilities",
+              "phone_internet",
+              "insurance",
+              "subscriptions",
+              "debt_payment",
+            ])
+            .nullable(),
           provenance: provenanceSchema,
+        })
+        .strict(),
+    ),
+    availableCashAlert: z
+      .object({
+        enabled: z.boolean(),
+        threshold: nonnegativeMoneySchema,
+        currentAvailable: moneySchema,
+        status: z.enum(["disabled", "above", "below", "unavailable"]),
+        episodeId: uuidSchema.nullable(),
+        alertAvailable: moneySchema.nullable(),
+        alertEvaluatedAt: instantSchema.nullable(),
+        alertFreshness: z
+          .enum(["current", "manual", "stale", "incomplete"])
+          .nullable(),
+      })
+      .strict(),
+    latestStarterApplication: z
+      .object({
+        id: uuidSchema,
+        itemCount: z.number().int().positive(),
+        removable: z.boolean(),
+        createdAt: instantSchema,
+      })
+      .strict()
+      .nullable(),
+    occurrences: z.array(
+      z
+        .object({
+          id: uuidSchema,
+          kind: z.enum(["income", "commitment", "savings"]),
+          sourceKey: z.string(),
+          commitmentId: uuidSchema.nullable(),
+          savingsGoalId: uuidSchema.nullable(),
+          incomeScheduleId: uuidSchema.nullable(),
+          name: z.string(),
+          expectedAmount: nonnegativeMoneySchema.nullable(),
+          expectedOn: dateSchema,
+          state: z.enum([
+            "expected",
+            "pending",
+            "verified",
+            "partial",
+            "overdue",
+            "skipped",
+            "needs_review",
+          ]),
+          explicitlySkipped: z.boolean(),
+          matchedAmount: nonnegativeMoneySchema,
+          remainingAmount: nonnegativeMoneySchema.nullable(),
+          provenance: provenanceSchema,
+          version: z.number().int().positive(),
+          scheduleRevision: z
+            .object({
+              kind: z.enum(["commitment", "savings", "income"]),
+              id: uuidSchema,
+              version: z.number().int().positive(),
+            })
+            .strict(),
+          verifiedAt: instantSchema.nullable(),
+          evidence: z.array(
+            z
+              .object({
+                transactionId: uuidSchema,
+                matchId: uuidSchema,
+                matchVersion: z.number().int().positive(),
+                merchant: z.string(),
+                occurredOn: dateSchema,
+                accountName: z.string(),
+                amountApplied: nonnegativeMoneySchema,
+                status: z.enum(["pending", "posted"]),
+                matchState: z.enum(["proposed", "confirmed"]),
+              })
+              .strict(),
+          ),
+        })
+        .strict(),
+    ),
+    savingsGoals: z.array(
+      z
+        .object({
+          id: uuidSchema,
+          version: z.number().int().positive(),
+          name: z.string().trim().min(1).max(120),
+          targetAmount: nonnegativeMoneySchema.nullable(),
+          targetDate: dateSchema.nullable(),
+          contributionAmount: nonnegativeMoneySchema,
+          schedule: z.enum([
+            "planning_period",
+            "one_time",
+            "weekly",
+            "biweekly",
+            "monthly",
+            "quarterly",
+            "annual",
+          ]),
+          nextDueOn: dateSchema.nullable(),
+          status: z.enum(["active", "paused", "completed", "archived"]),
+          provenance: provenanceSchema.exclude(["sample"]),
+          destination: z
+            .object({
+              accountId: uuidSchema,
+              name: z.string(),
+              provenance: z.enum(["manual", "csv", "plaid"]),
+              coverage: z.enum(["complete", "stale", "missing"]),
+            })
+            .strict()
+            .nullable(),
+          progress: z
+            .object({
+              confirmed: nonnegativeMoneySchema,
+              providerVerified: nonnegativeMoneySchema,
+              userConfirmed: nonnegativeMoneySchema,
+              assurance: z.enum([
+                "bank_confirmed",
+                "user_confirmed",
+                "not_started",
+                "stale",
+              ]),
+              protected: z.boolean(),
+              asOf: instantSchema.nullable(),
+            })
+            .strict(),
+          movements: z.array(
+            z
+              .object({
+                id: uuidSchema,
+                kind: z.enum([
+                  "opening_allocation",
+                  "contribution",
+                  "withdrawal",
+                  "reversal",
+                ]),
+                amount: nonnegativeMoneySchema,
+                effectiveOn: dateSchema,
+                verificationMethod: z.enum([
+                  "provider_verified",
+                  "user_confirmed",
+                ]),
+                provenance: z.enum(["manual", "plaid", "derived"]),
+                reversedMovementId: uuidSchema.nullable(),
+                createdAt: instantSchema,
+              })
+              .strict(),
+          ),
         })
         .strict(),
     ),
@@ -90,6 +289,34 @@ export const manualTransactionRequestSchema = z
     merchant: z.string().trim().min(1).max(160),
     amount: positiveMoneySchema,
     occurredOn: dateSchema,
+    direction: z.enum(["debit", "credit"]).default("debit"),
+    category: z
+      .enum([
+        "income",
+        "housing",
+        "utilities",
+        "groceries",
+        "dining",
+        "transportation",
+        "shopping",
+        "health",
+        "insurance",
+        "debt",
+        "subscriptions",
+        "fees",
+        "entertainment",
+        "education",
+        "giving",
+        "taxes",
+        "savings_investments",
+        "transfer",
+        "cash_atm",
+        "other",
+        "uncategorized",
+      ])
+      .default("uncategorized"),
+    occurrenceId: uuidSchema.optional(),
+    balanceIncludesActivity: z.boolean().default(false),
     requestId: uuidSchema,
   })
   .strict();
@@ -99,6 +326,16 @@ export const commitmentRequestSchema = z
     name: z.string().trim().min(1).max(120),
     amount: nonnegativeMoneySchema,
     dueDate: dateSchema.nullable().default(null),
+    recurrence: z
+      .enum([
+        "one_time",
+        "weekly",
+        "biweekly",
+        "monthly",
+        "quarterly",
+        "annual",
+      ])
+      .default("one_time"),
     requestId: uuidSchema,
   })
   .strict();
@@ -108,12 +345,134 @@ export const planUpdateRequestSchema = z
     expectedVersion: z.number().int().positive(),
     plannedSavings: nonnegativeMoneySchema,
     safetyBuffer: nonnegativeMoneySchema,
+    fallbackHorizonDays: z.number().int().min(1).max(90).optional(),
     requestId: uuidSchema,
   })
   .strict();
 
+const incomeScheduleFields = {
+  destinationAccountId: uuidSchema.nullable().default(null),
+  name: z.string().trim().min(1).max(120),
+  expectedAmount: positiveMoneySchema.nullable().default(null),
+  frequency: z.enum([
+    "weekly",
+    "biweekly",
+    "semi_monthly",
+    "monthly",
+    "quarterly",
+    "annual",
+    "irregular",
+  ]),
+  nextExpectedDate: dateSchema.nullable().default(null),
+  confirmed: z.boolean(),
+  anchorDay: z.number().int().min(1).max(31).nullable().default(null),
+  anchorEndOfMonth: z.boolean().default(false),
+  secondAnchorDay: z.number().int().min(1).max(31).nullable().default(null),
+  secondAnchorEndOfMonth: z.boolean().default(false),
+};
+function validateIncomeSchedule(
+  value: {
+    confirmed: boolean;
+    nextExpectedDate: string | null;
+    frequency:
+      | "weekly"
+      | "biweekly"
+      | "semi_monthly"
+      | "monthly"
+      | "quarterly"
+      | "annual"
+      | "irregular";
+    anchorDay: number | null;
+    anchorEndOfMonth: boolean;
+    secondAnchorDay: number | null;
+    secondAnchorEndOfMonth: boolean;
+  },
+  context: z.RefinementCtx,
+) {
+  if (value.confirmed && !value.nextExpectedDate)
+    context.addIssue({
+      code: "custom",
+      path: ["nextExpectedDate"],
+      message: "Choose the next expected date before using it for the plan",
+    });
+  if (value.confirmed && value.frequency === "irregular")
+    context.addIssue({
+      code: "custom",
+      path: ["confirmed"],
+      message: "Irregular income cannot shorten the plan",
+    });
+  if (
+    value.frequency === "semi_monthly" &&
+    (value.anchorDay === null || value.secondAnchorDay === null)
+  )
+    context.addIssue({
+      code: "custom",
+      path: ["secondAnchorDay"],
+      message: "Twice-monthly income needs both pay days",
+    });
+  if (
+    value.frequency === "semi_monthly" &&
+    ((value.anchorEndOfMonth && value.secondAnchorEndOfMonth) ||
+      (!value.anchorEndOfMonth &&
+        !value.secondAnchorEndOfMonth &&
+        value.anchorDay === value.secondAnchorDay))
+  )
+    context.addIssue({
+      code: "custom",
+      path: ["secondAnchorDay"],
+      message: "Choose two different pay days",
+    });
+  if (
+    value.frequency === "semi_monthly" &&
+    (value.anchorEndOfMonth || (value.anchorDay ?? 31) >= 28) &&
+    (value.secondAnchorEndOfMonth || (value.secondAnchorDay ?? 31) >= 28)
+  )
+    context.addIssue({
+      code: "custom",
+      path: ["secondAnchorDay"],
+      message:
+        "Choose at least one pay day from 1 through 27 so shorter months still have two deposits",
+    });
+}
+export const incomeScheduleCreateRequestSchema = z
+  .object({ ...incomeScheduleFields, requestId: uuidSchema })
+  .strict()
+  .superRefine(validateIncomeSchedule);
+export const incomeScheduleUpdateRequestSchema = z
+  .object({
+    ...incomeScheduleFields,
+    expectedVersion: z.number().int().positive(),
+    status: z.enum(["active", "paused", "archived"]),
+    requestId: uuidSchema,
+  })
+  .strict()
+  .superRefine(validateIncomeSchedule);
+
 export const connectionMutationRequestSchema = z
   .object({ requestId: uuidSchema })
+  .strict();
+export const occurrenceSkipRequestSchema = z
+  .object({
+    expectedVersion: z.number().int().positive(),
+    requestId: uuidSchema,
+  })
+  .strict();
+export const transactionOccurrenceLinkRequestSchema = z
+  .object({
+    occurrenceId: uuidSchema,
+    expectedTransactionVersion: z.number().int().positive(),
+    expectedOccurrenceVersion: z.number().int().positive(),
+    requestId: uuidSchema,
+  })
+  .strict();
+export const transactionOccurrenceUnlinkRequestSchema = z
+  .object({
+    expectedTransactionVersion: z.number().int().positive(),
+    expectedOccurrenceId: uuidSchema,
+    expectedMatchId: uuidSchema,
+    expectedMatchVersion: z.number().int().positive(),
+    requestId: uuidSchema,
+  })
   .strict();
 export const nativeAuthTicketRequestSchema = z
   .object({ state: z.string().regex(/^[A-Za-z0-9_-]{43,128}$/) })
@@ -185,6 +544,104 @@ export const accountInclusionRequestSchema = z
     requestId: uuidSchema,
   })
   .strict();
+export const manualModeRequestSchema = z
+  .object({ requestId: uuidSchema })
+  .strict();
+export const accountPlanningRoleRequestSchema = z
+  .object({
+    expectedVersion: z.number().int().positive(),
+    role: z.enum(["spendable", "protected", "excluded"]),
+    requestId: uuidSchema,
+  })
+  .strict();
+const savingsGoalFields = {
+  name: z.string().trim().min(1).max(120),
+  targetAmount: positiveMoneySchema.nullable(),
+  targetDate: dateSchema.nullable(),
+  contributionAmount: nonnegativeMoneySchema,
+  schedule: z.enum([
+    "planning_period",
+    "one_time",
+    "weekly",
+    "biweekly",
+    "monthly",
+    "quarterly",
+    "annual",
+  ]),
+  nextDueOn: dateSchema.nullable(),
+  destinationAccountId: uuidSchema.nullable(),
+} as const;
+export const savingsGoalCreateRequestSchema = z
+  .object({
+    ...savingsGoalFields,
+    useCurrentDestinationBalance: z.boolean().default(false),
+    trackManually: z.boolean().default(false),
+    requestId: uuidSchema,
+  })
+  .strict()
+  .superRefine((value, context) => {
+    validateSavingsGoalSchedule(value, context);
+    if (value.trackManually && value.destinationAccountId)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["trackManually"],
+        message: "Manual tracking creates its own savings account",
+      });
+    if (value.useCurrentDestinationBalance && !value.destinationAccountId)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["useCurrentDestinationBalance"],
+        message: "Choose a destination account before using its balance",
+      });
+    if (
+      BigInt(value.contributionAmount.minor) > 0n &&
+      !value.destinationAccountId &&
+      !value.trackManually
+    )
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["destinationAccountId"],
+        message: "Choose a destination before reserving a contribution",
+      });
+  });
+export const savingsGoalUpdateRequestSchema = z
+  .object({
+    ...savingsGoalFields,
+    expectedVersion: z.number().int().positive(),
+    useCurrentDestinationBalance: z.boolean().default(false),
+    status: z.enum(["active", "paused", "completed", "archived"]),
+    requestId: uuidSchema,
+  })
+  .strict()
+  .superRefine((value, context) => {
+    validateSavingsGoalSchedule(value, context);
+    if (value.useCurrentDestinationBalance && !value.destinationAccountId)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["useCurrentDestinationBalance"],
+        message: "Choose a destination before using its balance",
+      });
+    if (
+      BigInt(value.contributionAmount.minor) > 0n &&
+      !value.destinationAccountId
+    )
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["destinationAccountId"],
+        message: "Choose a destination before reserving a contribution",
+      });
+  });
+export const savingsGoalBalanceUpdateRequestSchema = z
+  .object({
+    expectedGoalVersion: z.number().int().positive(),
+    balance: nonnegativeMoneySchema,
+    asOf: instantSchema.refine(
+      (value) => new Date(value).getTime() <= Date.now() + 5 * 60_000,
+      "Balance time cannot be more than five minutes in the future",
+    ),
+    requestId: uuidSchema,
+  })
+  .strict();
 export const planCalibrationRequestSchema = z
   .object({
     expectedVersion: z.number().int().positive(),
@@ -198,6 +655,7 @@ export const planCalibrationRequestSchema = z
       .optional(),
     plannedSavings: nonnegativeMoneySchema,
     safetyBuffer: nonnegativeMoneySchema,
+    fallbackHorizonDays: z.number().int().min(1).max(90).optional(),
     commitments: z
       .array(
         z
@@ -207,6 +665,30 @@ export const planCalibrationRequestSchema = z
             name: z.string().trim().min(1).max(120),
             amount: nonnegativeMoneySchema,
             dueDate: dateSchema.nullable(),
+            recurrence: z
+              .enum([
+                "one_time",
+                "weekly",
+                "biweekly",
+                "monthly",
+                "quarterly",
+                "annual",
+              ])
+              .optional(),
+            setupSlot: z
+              .enum(["housing", "utilities", "subscriptions", "insurance"])
+              .nullable()
+              .optional(),
+            starterItemKey: z
+              .enum([
+                "housing",
+                "utilities",
+                "phone_internet",
+                "insurance",
+                "subscriptions",
+                "debt_payment",
+              ])
+              .optional(),
           })
           .strict()
           .refine(
@@ -215,12 +697,21 @@ export const planCalibrationRequestSchema = z
           ),
       )
       .max(100)
-      .refine(
-        (items) =>
-          new Set(items.map((item) => item.name.toLocaleLowerCase())).size ===
-          items.length,
-        "Commitment names must be unique",
-      ),
+      .refine((items) => {
+        const byName = new Map<string, typeof items>();
+        for (const item of items) {
+          const name = item.name.toLocaleLowerCase();
+          byName.set(name, [...(byName.get(name) ?? []), item]);
+        }
+        return [...byName.values()].every(
+          (matches) =>
+            matches.length === 1 || matches.every((item) => Boolean(item.id)),
+        );
+      }, "New commitments must have unique names"),
+    starterTemplate: z
+      .object({ key: z.literal("common_bills"), version: z.literal(1) })
+      .strict()
+      .optional(),
     removeCommitments: z
       .array(
         z
@@ -234,6 +725,48 @@ export const planCalibrationRequestSchema = z
       .default([]),
     requestId: uuidSchema,
   })
+  .strict()
+  .superRefine((value, context) => {
+    const starterItems = value.commitments.filter(
+      (item) => item.starterItemKey,
+    );
+    if (starterItems.length > 0 && !value.starterTemplate)
+      context.addIssue({
+        code: "custom",
+        path: ["starterTemplate"],
+        message: "Starter bill rows require their template identity",
+      });
+    if (value.starterTemplate && starterItems.length === 0)
+      context.addIssue({
+        code: "custom",
+        path: ["starterTemplate"],
+        message: "Choose at least one common bill row",
+      });
+    if (
+      new Set(starterItems.map((item) => item.starterItemKey)).size !==
+      starterItems.length
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["commitments"],
+        message: "Each common bill row can only be added once",
+      });
+    starterItems.forEach((item) => {
+      if (item.id || item.expectedVersion)
+        context.addIssue({
+          code: "custom",
+          path: [
+            "commitments",
+            value.commitments.indexOf(item),
+            "starterItemKey",
+          ],
+          message:
+            "Existing commitments cannot be reclassified as starter rows",
+        });
+    });
+  });
+export const starterApplicationUndoRequestSchema = z
+  .object({ requestId: uuidSchema })
   .strict();
 
 export const activityEventSchema = z
@@ -247,10 +780,38 @@ export const activityEventSchema = z
   })
   .strict();
 
+export const transactionCategorySchema = z.enum([
+  "income",
+  "housing",
+  "utilities",
+  "groceries",
+  "dining",
+  "transportation",
+  "shopping",
+  "health",
+  "insurance",
+  "debt",
+  "subscriptions",
+  "fees",
+  "entertainment",
+  "education",
+  "giving",
+  "taxes",
+  "savings_investments",
+  "transfer",
+  "cash_atm",
+  "other",
+  "uncategorized",
+]);
+
 export const transactionSchema = z
   .object({
     id: uuidSchema,
+    version: z.number().int().positive(),
     accountId: uuidSchema,
+    accountName: z.string(),
+    accountType: z.string(),
+    accountArchived: z.boolean(),
     merchant: z.string(),
     amount: moneySchema,
     occurredOn: dateSchema,
@@ -258,6 +819,421 @@ export const transactionSchema = z
     direction: z.enum(["debit", "credit"]),
     provenance: z.enum(["manual", "csv", "plaid", "sample"]),
     revision: z.number().int().positive(),
+    category: transactionCategorySchema.optional().default("uncategorized"),
+    categorySource: z
+      .enum(["provider", "deterministic", "merchant_rule", "user"])
+      .optional()
+      .default("deterministic"),
+    categoryConfidence: z
+      .enum(["high", "medium", "low"])
+      .optional()
+      .default("low"),
+    categoryVersion: z.number().int().positive().optional().default(1),
+  })
+  .strict();
+
+export const transactionFeedQuerySchema = z
+  .object({
+    cursor: z.string().max(512).optional(),
+    limit: z.coerce.number().int().min(1).max(100).default(30),
+    accountId: uuidSchema.optional(),
+    transactionId: uuidSchema.optional(),
+    category: transactionCategorySchema.optional(),
+    direction: z.enum(["debit", "credit"]).optional(),
+    status: z.enum(["pending", "posted"]).optional(),
+    from: dateSchema.optional(),
+    to: dateSchema.optional(),
+    query: z.string().trim().max(80).optional(),
+  })
+  .strict()
+  .refine((value) => !value.from || !value.to || value.from <= value.to, {
+    message: "From date must not be after to date",
+  });
+
+export const transactionFeedItemSchema = z
+  .object({
+    id: uuidSchema,
+    version: z.number().int().positive(),
+    merchant: z.string(),
+    amount: moneySchema,
+    occurredOn: dateSchema,
+    status: z.enum(["pending", "posted"]),
+    direction: z.enum(["debit", "credit"]),
+    provenance: z.enum(["manual", "csv", "plaid"]),
+    account: z
+      .object({
+        id: uuidSchema,
+        name: z.string(),
+        type: z.string(),
+        archived: z.boolean(),
+      })
+      .strict(),
+    category: transactionCategorySchema,
+    categorySource: z.enum([
+      "provider",
+      "deterministic",
+      "merchant_rule",
+      "user",
+    ]),
+    categoryConfidence: z.enum(["high", "medium", "low"]),
+    categoryVersion: z.number().int().positive(),
+    linkedOccurrence: z
+      .object({
+        id: uuidSchema,
+        name: z.string(),
+        state: z.string(),
+        matchState: z.enum(["proposed", "confirmed"]),
+        matchId: uuidSchema,
+        matchVersion: z.number().int().positive(),
+      })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+
+export const transactionFeedResponseSchema = z
+  .object({
+    items: z.array(transactionFeedItemSchema),
+    accounts: z.array(
+      z
+        .object({ id: uuidSchema, name: z.string(), archived: z.boolean() })
+        .strict(),
+    ),
+    nextCursor: z.string().nullable(),
+  })
+  .strict();
+
+export const payCycleQuerySchema = z
+  .object({
+    cursor: z.string().max(512).optional(),
+    limit: z.coerce.number().int().min(1).max(50).default(12),
+    planningCursor: z.string().max(512).optional(),
+    planningLimit: z.coerce.number().int().min(1).max(50).default(12),
+  })
+  .strict();
+
+const payCycleBreakdownSchema = z
+  .object({
+    categories: z.array(
+      z.object({ name: z.string(), amount: moneySchema }).strict(),
+    ),
+    incomeSources: z.array(
+      z.object({ name: z.string(), amount: moneySchema }).strict(),
+    ),
+    commitments: z.array(
+      z
+        .object({
+          id: uuidSchema,
+          name: z.string(),
+          expected: moneySchema,
+          paid: moneySchema,
+          remaining: moneySchema,
+          state: z.string(),
+        })
+        .strict(),
+    ),
+    savings: z.array(
+      z
+        .object({
+          id: uuidSchema,
+          name: z.string(),
+          kind: z.enum(["contribution", "withdrawal"]),
+          amount: moneySchema,
+          effectiveOn: dateSchema,
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
+export const payCycleSchema = z
+  .object({
+    id: uuidSchema,
+    startOn: dateSchema,
+    endOn: dateSchema.nullable(),
+    status: z.enum(["open", "completed"]),
+    timezone: z.string(),
+    updatedAfterBankCorrection: z.boolean(),
+    updatedAfterEvidenceChange: z.boolean(),
+    report: z
+      .object({
+        id: uuidSchema,
+        version: z.number().int().positive(),
+        status: z.enum(["provisional", "closed", "revised"]),
+        assurance: z.enum(["complete", "incomplete", "user_confirmed"]),
+        coverageReason: z.string().nullable(),
+        calculatedAt: instantSchema,
+        earned: moneySchema,
+        spent: moneySchema,
+        pending: moneySchema,
+        saved: moneySchema,
+        savingsWithdrawn: moneySchema,
+        commitmentsExpected: moneySchema,
+        commitmentsPaid: moneySchema,
+        commitmentsRemaining: moneySchema,
+        debtPaid: moneySchema,
+        openingCash: moneySchema.nullable(),
+        closingCash: moneySchema.nullable(),
+        unexplainedDelta: moneySchema.nullable(),
+        breakdown: payCycleBreakdownSchema,
+      })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+
+export const payCycleListResponseSchema = z
+  .object({
+    items: z.array(payCycleSchema),
+    nextCursor: z.string().nullable(),
+    nextPlanningCursor: z.string().nullable(),
+    hasVerifiedPayday: z.boolean(),
+    planningPeriods: z.array(
+      z
+        .object({
+          id: uuidSchema,
+          startOn: dateSchema,
+          throughOn: dateSchema,
+          basis: z.enum(["expected_income", "fallback"]),
+          state: z.enum([
+            "active",
+            "elapsed_verified",
+            "elapsed_unverified",
+            "replaced",
+          ]),
+          reason: z.enum([
+            "initial",
+            "payday_verified",
+            "expected_income_missed",
+            "fallback_elapsed",
+            "planning_input_changed",
+          ]),
+          recordedAt: instantSchema,
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
+export const payCycleDetailResponseSchema = z
+  .object({
+    cycle: payCycleSchema,
+    revisions: z.array(
+      z
+        .object({
+          id: uuidSchema,
+          version: z.number().int().positive(),
+          calculatedAt: instantSchema,
+          reason: z.string(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
+export const transactionCategoryUpdateSchema = z
+  .object({
+    category: transactionCategorySchema,
+    expectedVersion: z.number().int().positive(),
+    applyToFuture: z.boolean().default(false),
+    requestId: uuidSchema,
+  })
+  .strict();
+
+export const merchantCategoryRuleSchema = z
+  .object({
+    id: uuidSchema,
+    merchant: z.string().min(1).max(160),
+    category: transactionCategorySchema,
+    version: z.number().int().positive(),
+  })
+  .strict();
+export const merchantCategoryRulesResponseSchema = z
+  .object({ rules: z.array(merchantCategoryRuleSchema) })
+  .strict();
+export const merchantCategoryRuleUpdateSchema = z
+  .object({
+    category: transactionCategorySchema,
+    expectedVersion: z.number().int().positive(),
+    requestId: uuidSchema,
+  })
+  .strict();
+export const merchantCategoryRuleDeleteSchema = z
+  .object({
+    expectedVersion: z.number().int().positive(),
+    requestId: uuidSchema,
+  })
+  .strict();
+
+export const debtTypeSchema = z.enum([
+  "credit_card",
+  "student_loan",
+  "mortgage",
+  "auto",
+  "personal",
+  "other",
+]);
+export const debtSchema = z
+  .object({
+    id: uuidSchema,
+    version: z.number().int().positive(),
+    accountId: uuidSchema,
+    linkedCommitmentId: uuidSchema.nullable(),
+    paymentManaged: z.boolean(),
+    name: z.string().trim().min(1).max(120),
+    type: debtTypeSchema,
+    status: z.enum(["needs_review", "active", "paused", "closed", "archived"]),
+    provenance: z.enum(["manual", "csv", "plaid", "derived"]),
+    balance: z
+      .object({
+        raw: moneySchema,
+        owed: nonnegativeMoneySchema,
+        asOf: instantSchema,
+        coverage: z.enum(["complete", "stale"]),
+      })
+      .strict()
+      .nullable(),
+    terms: z
+      .object({
+        minimumPayment: nonnegativeMoneySchema.nullable(),
+        nextDueOn: dateSchema.nullable(),
+        asOf: instantSchema,
+        coverage: z.enum(["complete", "stale"]),
+      })
+      .strict()
+      .nullable(),
+    apr: z
+      .object({
+        basisPoints: z.number().int().min(0).max(100000),
+        type: z.enum([
+          "purchase",
+          "cash_advance",
+          "balance_transfer",
+          "promotional",
+          "fixed",
+          "variable",
+          "unknown",
+        ]),
+        asOf: instantSchema,
+        coverage: z.enum(["complete", "stale"]),
+      })
+      .strict()
+      .nullable(),
+    paymentPolicy: z
+      .object({
+        mode: z.enum(["minimum_due", "fixed_amount"]),
+        fixedAmount: nonnegativeMoneySchema.nullable(),
+        extraAmount: nonnegativeMoneySchema,
+        version: z.number().int().positive(),
+      })
+      .strict()
+      .nullable(),
+    projection: z.discriminatedUnion("status", [
+      z
+        .object({
+          status: z.enum(["missing_inputs", "stale", "payment_too_low"]),
+        })
+        .strict(),
+      z
+        .object({
+          status: z.literal("estimate"),
+          months: z.number().int().nonnegative(),
+          totalInterest: nonnegativeMoneySchema,
+          finalPayment: nonnegativeMoneySchema,
+        })
+        .strict(),
+    ]),
+  })
+  .strict();
+
+const debtEditableFields = {
+  name: z.string().trim().min(1).max(120),
+  type: debtTypeSchema,
+  linkedCommitmentId: uuidSchema.nullable().default(null),
+  minimumPayment: nonnegativeMoneySchema.nullable().default(null),
+  nextDueOn: dateSchema.nullable().default(null),
+  aprBasisPoints: z.number().int().min(0).max(100000).nullable().default(null),
+  paymentMode: z.enum(["minimum_due", "fixed_amount"]).default("minimum_due"),
+  fixedPayment: positiveMoneySchema.nullable().default(null),
+  extraPayment: nonnegativeMoneySchema.default({ minor: "0", currency: "USD" }),
+};
+export const debtCreateRequestSchema = z
+  .object({
+    ...debtEditableFields,
+    accountId: uuidSchema.nullable().default(null),
+    currentBalance: moneySchema.nullable().default(null),
+    createPaymentCommitment: z.boolean().default(false),
+    requestId: uuidSchema,
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (!value.accountId && !value.currentBalance)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["currentBalance"],
+        message: "A manual debt needs a current balance",
+      });
+    if (value.paymentMode === "fixed_amount" && !value.fixedPayment)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["fixedPayment"],
+        message: "Enter the fixed payment amount",
+      });
+    if (
+      value.createPaymentCommitment &&
+      (!value.nextDueOn || (!value.fixedPayment && !value.minimumPayment))
+    )
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["createPaymentCommitment"],
+        message: "A new payment needs an amount and due date",
+      });
+  });
+export const debtUpdateRequestSchema = z
+  .object({
+    ...debtEditableFields,
+    expectedVersion: z.number().int().positive(),
+    currentBalance: moneySchema.nullable().default(null),
+    createPaymentCommitment: z.boolean().default(false),
+    status: z.enum(["needs_review", "active", "paused", "closed", "archived"]),
+    requestId: uuidSchema,
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.paymentMode === "fixed_amount" && !value.fixedPayment)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["fixedPayment"],
+        message: "Enter the fixed payment amount",
+      });
+    if (
+      value.createPaymentCommitment &&
+      (!value.nextDueOn || (!value.fixedPayment && !value.minimumPayment))
+    )
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["createPaymentCommitment"],
+        message: "A new payment needs an amount and due date",
+      });
+  });
+
+export const manualTransactionUpdateSchema = z
+  .object({
+    merchant: z.string().trim().min(1).max(160),
+    amount: positiveMoneySchema,
+    occurredOn: dateSchema,
+    direction: z.enum(["debit", "credit"]),
+    category: transactionCategorySchema,
+    expectedVersion: z.number().int().positive(),
+    expectedCategoryVersion: z.number().int().positive(),
+    requestId: uuidSchema,
+  })
+  .strict();
+
+export const manualTransactionVoidSchema = z
+  .object({
+    expectedVersion: z.number().int().positive(),
+    requestId: uuidSchema,
   })
   .strict();
 
@@ -313,7 +1289,7 @@ export const onboardingAnalysisResponseSchema = z
     notice: z.string().min(1).max(320),
     suggestions: z
       .object({
-        income: recurringSuggestionSchema.nullable(),
+        incomes: z.array(recurringSuggestionSchema).max(12).default([]),
         commitments: z.array(recurringSuggestionSchema).max(40),
         savings: recurringSuggestionSchema.nullable(),
         needsReview: z.array(recurringSuggestionSchema).max(20),
@@ -428,12 +1404,14 @@ export const bootstrapResponseSchema = z
           currency: currencySchema,
           provenance: z.enum(["manual", "csv", "plaid", "sample"]),
           includeInPlan: z.boolean(),
+          planningRole: z.enum(["spendable", "protected", "excluded"]),
           coverage: z.enum(["complete", "stale", "missing", "excluded"]),
           balance: moneySchema.nullable(),
           balanceAsOf: instantSchema.nullable(),
         })
         .strict(),
     ),
+    debts: z.array(debtSchema),
     connections: z.array(
       z
         .object({
@@ -479,29 +1457,81 @@ export const errorResponseSchema = z
   })
   .strict();
 
+const reminderLeadDaysSchema = z
+  .array(z.number().int().min(0).max(30))
+  .min(1)
+  .max(2)
+  .refine(
+    (days) =>
+      new Set(days).size === days.length &&
+      days.every((day, index) => index === 0 || days[index - 1]! > day),
+    "Reminder days must be unique and ordered from earliest to latest",
+  );
+const notificationPreferenceFields = {
+  version: z.number().int().positive(),
+  emailAddress: z.string().email().max(320).nullable(),
+  emailVerified: z.boolean(),
+  emailEnabled: z.boolean(),
+  pushEnabled: z.boolean(),
+  connectionHealth: z.boolean(),
+  commitmentReminders: z.boolean(),
+  incomeReminders: z.boolean(),
+  savingsReminders: z.boolean(),
+  exceptionActivity: z.boolean(),
+  weeklyDigest: z.boolean(),
+  availableCashAlerts: z.boolean(),
+  availableCashThreshold: z
+    .object({
+      minor: z
+        .string()
+        .regex(/^\d+$/)
+        .refine((value) => BigInt(value) <= 100000000n),
+      currency: z.literal("USD"),
+    })
+    .strict(),
+  lockScreenDetail: z.boolean(),
+  reminderHour: z.number().int().min(0).max(23),
+  reminderMinute: z.number().int().min(0).max(59),
+  commitmentReminderDays: reminderLeadDaysSchema,
+  longTermReminderDays: reminderLeadDaysSchema,
+  savingsReminderDays: reminderLeadDaysSchema,
+  quietStartMinute: z.number().int().min(0).max(1439),
+  quietEndMinute: z.number().int().min(0).max(1439),
+  timezone: z
+    .string()
+    .min(1)
+    .max(80)
+    .refine(isTimeZone, "Invalid IANA timezone"),
+} as const;
+
+const quietWindowIsValid = (value: {
+  quietStartMinute: number;
+  quietEndMinute: number;
+}) => value.quietStartMinute !== value.quietEndMinute;
+
 export const notificationPreferencesSchema = z
+  .object(notificationPreferenceFields)
+  .strict()
+  .refine(quietWindowIsValid, {
+    path: ["quietEndMinute"],
+    message: "Quiet time must have a start and end",
+  });
+const {
+  emailVerified: _emailVerified,
+  version: _version,
+  ...notificationPreferenceUpdateFields
+} = notificationPreferenceFields;
+export const notificationPreferencesUpdateSchema = z
   .object({
-    emailAddress: z.string().email().max(320).nullable(),
-    emailVerified: z.boolean(),
-    emailEnabled: z.boolean(),
-    pushEnabled: z.boolean(),
-    connectionHealth: z.boolean(),
-    commitmentReminders: z.boolean(),
-    exceptionActivity: z.boolean(),
-    weeklyDigest: z.boolean(),
-    lockScreenDetail: z.boolean(),
-    reminderHour: z.number().int().min(0).max(23),
-    timezone: z
-      .string()
-      .min(1)
-      .max(80)
-      .refine(isTimeZone, "Invalid IANA timezone"),
+    ...notificationPreferenceUpdateFields,
+    expectedVersion: z.number().int().positive(),
+    requestId: uuidSchema,
   })
-  .strict();
-export const notificationPreferencesUpdateSchema = notificationPreferencesSchema
-  .omit({ emailVerified: true })
-  .extend({ requestId: uuidSchema })
-  .strict();
+  .strict()
+  .refine(quietWindowIsValid, {
+    path: ["quietEndMinute"],
+    message: "Quiet time must have a start and end",
+  });
 export const notificationEndpointRequestSchema = z
   .object({
     platform: z.enum(["ios", "android", "web"]),
@@ -531,7 +1561,7 @@ export const notificationTestResponseSchema = z
 export const accountExportResponseSchema = z
   .object({
     generatedAt: instantSchema,
-    formatVersion: z.literal(1),
+    formatVersion: z.literal(5),
     data: z.record(z.string(), z.unknown()),
   })
   .strict();
@@ -570,8 +1600,49 @@ export type ManualBalanceRequest = z.infer<typeof manualBalanceRequestSchema>;
 export type ManualTransactionRequest = z.infer<
   typeof manualTransactionRequestSchema
 >;
+export type TransactionFeedQuery = z.infer<typeof transactionFeedQuerySchema>;
+export type TransactionFeedResponse = z.infer<
+  typeof transactionFeedResponseSchema
+>;
+export type PayCycleQuery = z.infer<typeof payCycleQuerySchema>;
+export type PayCycleListResponse = z.infer<typeof payCycleListResponseSchema>;
+export type PayCycleDetailResponse = z.infer<
+  typeof payCycleDetailResponseSchema
+>;
+export type TransactionCategoryUpdate = z.infer<
+  typeof transactionCategoryUpdateSchema
+>;
+export type MerchantCategoryRulesResponse = z.infer<
+  typeof merchantCategoryRulesResponseSchema
+>;
+export type MerchantCategoryRuleUpdate = z.infer<
+  typeof merchantCategoryRuleUpdateSchema
+>;
+export type MerchantCategoryRuleDelete = z.infer<
+  typeof merchantCategoryRuleDeleteSchema
+>;
+export type ManualTransactionUpdate = z.infer<
+  typeof manualTransactionUpdateSchema
+>;
+export type ManualTransactionVoid = z.infer<typeof manualTransactionVoidSchema>;
 export type CommitmentRequest = z.infer<typeof commitmentRequestSchema>;
+export type OccurrenceSkipRequest = z.infer<typeof occurrenceSkipRequestSchema>;
+export type TransactionOccurrenceLinkRequest = z.infer<
+  typeof transactionOccurrenceLinkRequestSchema
+>;
+export type TransactionOccurrenceUnlinkRequest = z.infer<
+  typeof transactionOccurrenceUnlinkRequestSchema
+>;
 export type PlanUpdateRequest = z.infer<typeof planUpdateRequestSchema>;
+export type StarterApplicationUndoRequest = z.infer<
+  typeof starterApplicationUndoRequestSchema
+>;
+export type IncomeScheduleCreateRequest = z.infer<
+  typeof incomeScheduleCreateRequestSchema
+>;
+export type IncomeScheduleUpdateRequest = z.infer<
+  typeof incomeScheduleUpdateRequestSchema
+>;
 export type ConnectionMutationRequest = z.infer<
   typeof connectionMutationRequestSchema
 >;
@@ -595,6 +1666,21 @@ export type PlaidUpdateCompleteRequest = z.infer<
 export type AccountInclusionRequest = z.infer<
   typeof accountInclusionRequestSchema
 >;
+export type ManualModeRequest = z.infer<typeof manualModeRequestSchema>;
+export type AccountPlanningRoleRequest = z.infer<
+  typeof accountPlanningRoleRequestSchema
+>;
+export type SavingsGoalCreateRequest = z.infer<
+  typeof savingsGoalCreateRequestSchema
+>;
+export type SavingsGoalUpdateRequest = z.infer<
+  typeof savingsGoalUpdateRequestSchema
+>;
+export type SavingsGoalBalanceUpdateRequest = z.infer<
+  typeof savingsGoalBalanceUpdateRequestSchema
+>;
+export type DebtCreateRequest = z.infer<typeof debtCreateRequestSchema>;
+export type DebtUpdateRequest = z.infer<typeof debtUpdateRequestSchema>;
 export type ExceptionDecisionRequest = z.infer<
   typeof exceptionDecisionRequestSchema
 >;
@@ -645,6 +1731,35 @@ function validMinor(value: string, minimum: bigint, maximum: bigint): boolean {
   } catch {
     return false;
   }
+}
+
+function validateSavingsGoalSchedule(
+  value: {
+    schedule:
+      | "planning_period"
+      | "one_time"
+      | "weekly"
+      | "biweekly"
+      | "monthly"
+      | "quarterly"
+      | "annual";
+    nextDueOn: string | null;
+    targetDate: string | null;
+  },
+  context: z.RefinementCtx,
+) {
+  if (value.schedule !== "planning_period" && !value.nextDueOn)
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["nextDueOn"],
+      message: "This savings schedule requires a next contribution date",
+    });
+  if (value.targetDate && value.nextDueOn && value.targetDate < value.nextDueOn)
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["targetDate"],
+      message: "The target date cannot be before the next contribution",
+    });
 }
 
 function isCalendarDate(value: string): boolean {

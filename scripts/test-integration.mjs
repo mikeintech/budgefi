@@ -27,15 +27,21 @@ const directory = externalDatabaseUrl
   : await mkdtemp(join(tmpdir(), "budgefi-pg17-test-"));
 const port = externalDatabaseUrl ? null : await freePort();
 const databaseUrl =
-  externalDatabaseUrl ??
-  `postgresql://postgres@127.0.0.1:${port}/budgefi_test`;
+  externalDatabaseUrl ?? `postgresql://postgres@127.0.0.1:${port}/budgefi_test`;
 let started = false;
 
 try {
   if (externalDatabaseUrl) {
     await resetExternalDatabase(databaseUrl);
   } else {
-    run(join(bin, "initdb"), ["-A", "trust", "-U", "postgres", "-D", directory]);
+    run(join(bin, "initdb"), [
+      "-A",
+      "trust",
+      "-U",
+      "postgres",
+      "-D",
+      directory,
+    ]);
     run(join(bin, "pg_ctl"), [
       "-D",
       directory,
@@ -183,6 +189,10 @@ async function seedLegacySampleMigrationFixtures(databaseUrl) {
       INSERT INTO financial_transactions(id,household_id,account_id,source_kind,source_record_id,merchant,amount_minor,currency,direction,occurred_on,status) VALUES
         ('22000000-0000-4000-8000-000000000601','22000000-0000-4000-8000-000000000101','22000000-0000-4000-8000-000000000211','sample','legacy-charge','Legacy sample merchant',1000,'USD','debit',current_date,'posted'),
         ('22000000-0000-4000-8000-000000000602','22000000-0000-4000-8000-000000000102','22000000-0000-4000-8000-000000000202','manual','real-charge','Real manual merchant',2500,'USD','debit',current_date,'posted');
+      INSERT INTO financial_transactions(household_id,account_id,source_kind,source_record_id,merchant,amount_minor,currency,direction,occurred_on,status)
+        SELECT '22000000-0000-4000-8000-000000000102','22000000-0000-4000-8000-000000000202','manual',
+          'scale-'||series,'Scale merchant '||series,1000+series,'USD','debit',current_date-(series % 365),'posted'
+        FROM generate_series(1,10000) series;
       INSERT INTO exception_cases(id,household_id,case_type,status,title) VALUES
         ('22000000-0000-4000-8000-000000000701','22000000-0000-4000-8000-000000000101','possible_duplicate','open','Legacy sample case');
       INSERT INTO case_evidence(

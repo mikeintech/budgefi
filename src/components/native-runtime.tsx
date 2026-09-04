@@ -201,7 +201,7 @@ export function NativeRuntime({ children }: { children: React.ReactNode }) {
 
   if (!isNativeApp) return children;
   if (!ready)
-    return <div className="min-h-dvh bg-paper" aria-label="Opening Budgefi" />;
+    return <div className="app-boot min-h-dvh bg-paper" aria-label="Opening Budgefi" />;
   return (
     <>
       {children}

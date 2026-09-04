@@ -7,9 +7,21 @@ import {
   nativeSecureSet,
 } from "@/lib/native-storage";
 import { apiBaseUrl } from "@/lib/platform";
+import { createSingleFlight } from "@/lib/single-flight";
 
 const endpointKey = "notification-endpoint-id";
 const devicePushKey = "notification-device-enabled";
+type PushEnableResult = { okay: boolean; message: string };
+
+export async function isNotificationPermissionDenied(): Promise<boolean> {
+  if (!isNativeApp) return false;
+  return (await PushNotifications.checkPermissions()).receive === "denied";
+}
+
+export async function openNotificationSettings(): Promise<void> {
+  if (!isNativeApp) return;
+  window.location.assign("app-settings:");
+}
 
 export async function isPushEnabledOnThisDevice(): Promise<boolean> {
   if (!isNativeApp || !(await nativeSecureGet<boolean>(devicePushKey)))
@@ -20,10 +32,10 @@ export async function isPushEnabledOnThisDevice(): Promise<boolean> {
   return false;
 }
 
-export async function enablePushOnThisDevice(): Promise<{
-  okay: boolean;
-  message: string;
-}> {
+export const enablePushOnThisDevice: () => Promise<PushEnableResult> =
+  createSingleFlight(enablePushOnThisDeviceOnce);
+
+async function enablePushOnThisDeviceOnce(): Promise<PushEnableResult> {
   if (!isNativeApp)
     return {
       okay: false,
@@ -46,9 +58,9 @@ export async function enablePushOnThisDevice(): Promise<{
     const timeout = window.setTimeout(
       () =>
         reject(
-          new Error("Your phone did not finish notification registration.")
+          new Error("Your phone did not finish notification registration."),
         ),
-      15_000
+      15_000,
     );
     let registered: { remove: () => Promise<void> } | null = null;
     let failed: { remove: () => Promise<void> } | null = null;
@@ -71,7 +83,7 @@ export async function enablePushOnThisDevice(): Promise<{
         window.setTimeout(() => {
           void registered?.remove();
           void failed?.remove();
-        }, 16_000)
+        }, 16_000),
       );
   });
   const priorEndpointId = await nativeSecureGet<string>(endpointKey);

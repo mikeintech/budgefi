@@ -1,10 +1,12 @@
 import { Link } from "react-router-dom";
 import { SignOutButton } from "@clerk/react";
 import {
+  CalendarRange,
   ChevronRight,
   Database,
   HelpCircle,
   PenLine,
+  ReceiptText,
   Settings2,
   Shield,
   type LucideIcon,
@@ -112,6 +114,18 @@ export function MorePage() {
         </Link>
 
         <section className="mt-6 overflow-hidden rounded-[22px] border border-ink/10 bg-white">
+          <MoreLink
+            to="/activity"
+            icon={ReceiptText}
+            title="Transactions"
+            detail="Search, filter, categorize, and review money activity"
+          />
+          <MoreLink
+            to="/pay-cycles"
+            icon={CalendarRange}
+            title="Pay cycles"
+            detail="Verified payday-to-payday history"
+          />
           <MoreLink
             to="/manual"
             icon={PenLine}

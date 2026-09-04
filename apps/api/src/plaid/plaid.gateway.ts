@@ -1,5 +1,5 @@
 import { Inject, Injectable, ServiceUnavailableException } from "@nestjs/common";
-import { Configuration, CountryCode, PlaidApi, PlaidEnvironments, Products, type AccountBase, type Transaction } from "plaid";
+import { Configuration, CountryCode, PlaidApi, PlaidEnvironments, Products, type AccountBase, type LiabilitiesObject, type Transaction } from "plaid";
 import { PlaidConfig } from "./plaid.config.js";
 
 export type PlaidSyncPage = Readonly<{
@@ -46,6 +46,7 @@ export class PlaidGateway {
         ...(input.mode === "create"
           ? {
               products: [Products.Transactions],
+              optional_products: [Products.Liabilities],
               transactions: { days_requested: 180 },
             }
           : { access_token: input.accessToken! }),
@@ -102,6 +103,21 @@ export class PlaidGateway {
       const response = await this.client.accountsGet({ access_token: accessToken });
       return { accounts: response.data.accounts, institutionId: response.data.item.institution_id ?? null, requestId: response.data.request_id };
     } catch (error) { throw normalizePlaidError(error); }
+  }
+
+  async getLiabilities(accessToken: string): Promise<{ liabilities: LiabilitiesObject; requestId: string } | null> {
+    this.assertEnabled();
+    try {
+      const response = await this.client.liabilitiesGet({ access_token: accessToken });
+      return { liabilities: response.data.liabilities, requestId: response.data.request_id };
+    } catch (error) {
+      const normalized = normalizePlaidError(error);
+      // Liabilities is optional because many institutions do not support it.
+      // Account balances and Transactions must continue to synchronize.
+      if (["PRODUCT_NOT_READY", "NO_LIABILITY_ACCOUNTS", "PRODUCTS_NOT_SUPPORTED", "PRODUCT_NOT_SUPPORTED"].includes(normalized.code))
+        return null;
+      throw normalized;
+    }
   }
 
   async getInstitutionName(institutionId: string): Promise<string | null> {

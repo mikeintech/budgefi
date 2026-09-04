@@ -12,6 +12,7 @@ import {
   WalletCards,
 } from "lucide-react";
 import { MobileShell } from "@/components/layout";
+import { DebtEditor } from "@/components/debt-editor";
 import {
   PlaidLinkButton,
   type PlaidLinkActions,
@@ -28,6 +29,9 @@ import {
 import {
   type FinancialAccount,
   type FinancialConnection,
+  type Debt,
+  type SavingsGoal,
+  type IncomeSchedule,
   useAppState,
 } from "@/state/app-state";
 
@@ -56,6 +60,7 @@ export function ConnectionsPage() {
       (account) =>
         account.coverage === "stale" || account.coverage === "missing",
     );
+  const incomplete = state.sourceStale && manual;
 
   return (
     <MobileShell>
@@ -70,16 +75,18 @@ export function ConnectionsPage() {
               See where every planning number comes from.
             </p>
           </div>
-          <Badge tone={stale ? "coral" : "green"}>
+          <Badge tone={stale || incomplete ? "coral" : "green"}>
             {state.backendStatus === "loading"
               ? "Loading"
               : state.backendStatus === "unavailable"
                 ? "Offline"
-                : stale
+                : incomplete
                   ? "Incomplete"
-                  : manual
-                    ? "Manual"
-                    : "Current"}
+                  : stale
+                    ? "Incomplete"
+                    : manual
+                      ? "Manual"
+                      : "Current"}
           </Badge>
         </div>
 
@@ -130,6 +137,10 @@ export function ConnectionsPage() {
               connection.provider === "plaid" &&
               connection.status !== "revoked",
           )}
+          accounts={state.accounts}
+          savingsGoals={state.savingsGoals}
+          debts={state.debts}
+          incomeSchedules={state.incomeSchedules}
           onSync={state.syncPlaid}
           onDisconnect={state.disconnectPlaid}
           createToken={state.createPlaidLinkToken}
@@ -141,7 +152,9 @@ export function ConnectionsPage() {
           <ManualPlanSwitch
             accounts={state.accounts.filter(
               (account) =>
-                account.provenance !== "manual" && account.includeInPlan,
+                account.provenance !== "manual" &&
+                account.includeInPlan &&
+                account.planningRole === "spendable",
             )}
             onSwitch={state.activateManualMode}
             onDone={() => navigate("/manual")}
@@ -231,9 +244,42 @@ function AccountCard({
     include: boolean,
   ) => Promise<boolean>;
 }) {
+  const { accounts, dataMode, debts, incomeSchedules, savingsGoals } =
+    useAppState();
+  const debt = debts.find(
+    (item) => item.accountId === account.id && item.status !== "archived",
+  );
+  const incomeNames = incomeSchedules
+    .filter(
+      (item) =>
+        item.status !== "archived" && item.destinationAccountId === account.id,
+    )
+    .map((item) => item.name);
+  const savingsNames = savingsGoals
+    .filter(
+      (item) =>
+        item.status !== "archived" &&
+        item.destination?.accountId === account.id,
+    )
+    .map((item) => item.name);
   const [changing, setChanging] = useState(false);
   useEffect(() => setChanging(false), [account.includeInPlan, account.version]);
   const eligible = ["cash", "checking", "savings"].includes(account.type);
+  const anotherConfirmedSpendableSource = accounts.some(
+    (item) =>
+      item.id !== account.id &&
+      item.includeInPlan &&
+      item.planningRole === "spendable" &&
+      ["cash", "checking", "savings"].includes(item.type) &&
+      item.balanceAsOf !== null,
+  );
+  const exclusionWouldRemoveLastConfirmedSource =
+    eligible && account.includeInPlan && !anotherConfirmedSpendableSource;
+  const manualAccountRequiresModeSwitch =
+    dataMode === "connected" &&
+    account.provenance === "manual" &&
+    !account.includeInPlan;
+  const liability = account.type === "credit" || account.type === "loan";
   const unhealthy =
     account.coverage === "stale" || account.coverage === "missing";
   const coverageLabel =
@@ -244,11 +290,15 @@ function AccountCard({
         : account.coverage === "missing"
           ? "Missing balance"
           : "Stale";
-  const impact = account.includeInPlan
-    ? "Included in known cash"
-    : eligible
-      ? "Protected from the plan"
-      : "Activity only";
+  const impact = liability
+    ? debt
+      ? "Tracked as debt · never counted as spendable cash"
+      : "Available to track as debt · never counted as spendable cash"
+    : account.planningRole === "spendable"
+      ? "Included in spendable cash"
+      : account.planningRole === "protected"
+        ? "Protected savings · excluded from spendable cash"
+        : "Excluded from the plan";
   const toggle = async () => {
     setChanging(true);
     const okay = await onInclusion(account, !account.includeInPlan);
@@ -319,6 +369,9 @@ function AccountCard({
             }
           />
           <Detail label="Planning treatment" value={impact} />
+          {incomeNames.length > 0 && (
+            <Detail label="Income schedules" value={incomeNames.join(", ")} />
+          )}
           <Detail
             label="Permission"
             value={
@@ -328,10 +381,14 @@ function AccountCard({
             }
           />
         </div>
-        {eligible && (
+        {eligible && account.planningRole !== "protected" && (
           <Button
             onClick={toggle}
-            disabled={changing}
+            disabled={
+              changing ||
+              exclusionWouldRemoveLastConfirmedSource ||
+              manualAccountRequiresModeSwitch
+            }
             variant={account.includeInPlan ? "outline" : "default"}
             className="mt-5 w-full"
           >
@@ -340,12 +397,43 @@ function AccountCard({
                 <CircleDashed className="size-4 animate-spin" />
                 Saving…
               </>
+            ) : manualAccountRequiresModeSwitch ? (
+              "Use the manual option below"
             ) : account.includeInPlan ? (
-              "Protect from everyday plan"
+              "Exclude from everyday plan"
             ) : (
               "Include in spendable cash"
             )}
           </Button>
+        )}
+        {exclusionWouldRemoveLastConfirmedSource && (
+          <p className="mt-2 text-xs leading-5 text-muted">
+            Keep one current cash source in the plan. Include another funded
+            account first, or use the manual-values switch below.
+          </p>
+        )}
+        {manualAccountRequiresModeSwitch && (
+          <p className="mt-2 text-xs leading-5 text-muted">
+            Switching modes also removes connected balances from spendable cash,
+            so it requires the confirmation below.
+          </p>
+        )}
+        {account.planningRole === "protected" && (
+          <Button asChild variant="outline" className="mt-5 w-full">
+            <Link to="/plan">
+              Manage{" "}
+              {savingsNames.length > 0 ? "savings goal" : "income schedule"}
+            </Link>
+          </Button>
+        )}
+        {liability && (
+          <div className="mt-5">
+            {debt ? (
+              <DebtEditor debt={debt} />
+            ) : (
+              <DebtEditor account={account} />
+            )}
+          </div>
         )}
       </SheetContent>
     </Sheet>
@@ -354,11 +442,19 @@ function AccountCard({
 
 function RealPlaidConnections({
   connections,
+  accounts,
+  savingsGoals,
+  debts,
+  incomeSchedules,
   onSync,
   onDisconnect,
   ...actions
 }: {
   connections: FinancialConnection[];
+  accounts: FinancialAccount[];
+  savingsGoals: SavingsGoal[];
+  debts: Debt[];
+  incomeSchedules: IncomeSchedule[];
   onSync: (id: string) => Promise<boolean>;
   onDisconnect: (id: string) => Promise<boolean>;
 } & PlaidLinkActions) {
@@ -367,6 +463,41 @@ function RealPlaidConnections({
     null,
   );
   const [result, setResult] = useState<string | null>(null);
+  const [recoveryGoals, setRecoveryGoals] = useState<string[]>([]);
+  const affectedGoals = confirming
+    ? savingsGoals.filter((goal) => {
+        const destination = goal.destination?.accountId;
+        return (
+          destination !== undefined &&
+          accounts.some(
+            (account) =>
+              account.id === destination &&
+              account.connectionId === confirming.id,
+          )
+        );
+      })
+    : [];
+  const affectedDebts = confirming
+    ? debts.filter((debt) =>
+        accounts.some(
+          (account) =>
+            account.id === debt.accountId &&
+            account.connectionId === confirming.id,
+        ),
+      )
+    : [];
+  const affectedIncome = confirming
+    ? incomeSchedules.filter(
+        (schedule) =>
+          schedule.status !== "archived" &&
+          schedule.destinationAccountId &&
+          accounts.some(
+            (account) =>
+              account.id === schedule.destinationAccountId &&
+              account.connectionId === confirming.id,
+          ),
+      )
+    : [];
   const act = async (
     id: string,
     operation: () => Promise<boolean>,
@@ -386,12 +517,22 @@ function RealPlaidConnections({
   const revoke = async () => {
     if (!confirming) return;
     const connection = confirming;
+    const affected = affectedGoals.map((goal) => goal.name);
+    const affectedDebtNames = affectedDebts.map((debt) => debt.name);
+    const affectedIncomeNames = affectedIncome.map((schedule) => schedule.name);
     const okay = await act(
       connection.id,
       () => onDisconnect(connection.id),
-      `${connection.institutionName ?? "Bank access"} was removed. Its accounts are excluded from planning.`,
+      affected.length > 0 ||
+        affectedDebtNames.length > 0 ||
+        affectedIncomeNames.length > 0
+        ? `${connection.institutionName ?? "Bank access"} was removed. Review affected plan items: ${[...affected, ...affectedDebtNames, ...affectedIncomeNames].join(", ")}.`
+        : `${connection.institutionName ?? "Bank access"} was removed. Its accounts are excluded from planning.`,
     );
-    if (okay) setConfirming(null);
+    if (okay) {
+      setRecoveryGoals(affected);
+      setConfirming(null);
+    }
   };
   return (
     <section className="mt-6">
@@ -400,13 +541,16 @@ function RealPlaidConnections({
         <span className="text-xs text-muted">Optional · read-only</span>
       </div>
       {result && (
-        <p
-          role="status"
-          aria-live="polite"
-          className="mb-3 rounded-2xl border border-rule bg-white p-3 text-xs leading-5 text-muted"
-        >
-          {result}
-        </p>
+        <div className="mb-3 rounded-2xl border border-rule bg-white p-3 text-xs leading-5 text-muted">
+          <p role="status" aria-live="polite">
+            {result}
+          </p>
+          {recoveryGoals.length > 0 && (
+            <Button asChild size="sm" variant="outline" className="mt-3 w-full">
+              <Link to="/plan">Choose a new savings account</Link>
+            </Button>
+          )}
+        </div>
       )}
       {connections.length > 0 && (
         <div className="mb-3 space-y-2">
@@ -499,6 +643,26 @@ function RealPlaidConnections({
             <strong>What happens</strong>
             <ul className="mt-2 list-disc space-y-1 pl-5 text-muted">
               <li>Linked accounts are removed from new plan calculations.</li>
+              {affectedGoals.length > 0 && (
+                <li>
+                  {affectedGoals.length === 1
+                    ? `${affectedGoals[0]!.name} will stop automatic tracking. Its active contribution will pause until you choose a new savings account.`
+                    : `${affectedGoals.length} savings goals will stop automatic tracking. Active contributions will pause until you choose new savings accounts: ${affectedGoals.map((goal) => goal.name).join(", ")}.`}
+                </li>
+              )}
+              {affectedDebts.length > 0 && (
+                <li>
+                  Debt tracking and Budgefi-created payment reservations will
+                  pause for: {affectedDebts.map((debt) => debt.name).join(", ")}
+                  . Review them after reconnecting.
+                </li>
+              )}
+              {affectedIncome.length > 0 && (
+                <li>
+                  Income dates will stop shortening the plan until you review:{" "}
+                  {affectedIncome.map((item) => item.name).join(", ")}.
+                </li>
+              )}
               <li>Reconnect later by setting up the bank again.</li>
               <li>Existing transaction history stays in your records.</li>
             </ul>

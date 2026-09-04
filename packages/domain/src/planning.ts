@@ -1,6 +1,6 @@
 import { addMoney, money, subtractMoney, sumMoney, type Currency, type Money } from "./money.js";
 
-export const calculationPolicyVersion = "safe-to-spend/v1";
+export const calculationPolicyVersion = "safe-to-spend/v2";
 
 export type ProjectionInput = Readonly<{
   knownCash: Money;

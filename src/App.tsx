@@ -29,6 +29,18 @@ const ActivityPage = lazyNamed(
   () => import("@/pages/activity"),
   "ActivityPage",
 );
+const CategoryRulesPage = lazyNamed(
+  () => import("@/pages/category-rules"),
+  "CategoryRulesPage",
+);
+const PayCyclesPage = lazyNamed(
+  () => import("@/pages/pay-cycles"),
+  "PayCyclesPage",
+);
+const PayCycleDetailPage = lazyNamed(
+  () => import("@/pages/pay-cycles"),
+  "PayCycleDetailPage",
+);
 const MorePage = lazyNamed(() => import("@/pages/more"), "MorePage");
 const OnboardingPage = lazyNamed(
   () => import("@/pages/onboarding"),
@@ -65,10 +77,7 @@ export default function App() {
       <RouteMetadata />
       <Suspense fallback={<RouteLoading />}>
         <Routes>
-          <Route
-            path="/"
-            element={<HomeRoute />}
-          />
+          <Route path="/" element={<HomeRoute />} />
           <Route path="/sign-up/*" element={<SignUpPage />} />
           <Route path="/sign-in/*" element={<SignInPage />} />
           <Route path="/forgot-password/*" element={<ForgotPasswordPage />} />
@@ -112,6 +121,22 @@ export default function App() {
                 <ActivityPage />
               </Protected>
             }
+          />
+          <Route
+            path="/category-rules"
+            element={
+              <Protected>
+                <CategoryRulesPage />
+              </Protected>
+            }
+          />
+          <Route
+            path="/pay-cycles"
+            element={<Protected><PayCyclesPage /></Protected>}
+          />
+          <Route
+            path="/pay-cycles/:cycleId"
+            element={<Protected><PayCycleDetailPage /></Protected>}
           />
           <Route
             path="/more"
@@ -206,6 +231,8 @@ const routeTitles: Record<string, string> = {
   "/review": "Review",
   "/plan": "Plan",
   "/activity": "Activity",
+  "/category-rules": "Category rules",
+  "/pay-cycles": "Pay cycles",
   "/more": "More",
   "/onboarding": "Set up Budgefi",
   "/connections": "Accounts & data",
@@ -217,12 +244,11 @@ const routeTitles: Record<string, string> = {
 function RouteMetadata() {
   const { pathname } = useLocation();
   useEffect(() => {
-    const rootPath =
-      pathname.startsWith("/review/")
-        ? "/review"
-        : pathname.startsWith("/settings/")
-          ? "/settings"
-          : pathname;
+    const rootPath = pathname.startsWith("/review/")
+      ? "/review"
+      : pathname.startsWith("/settings/")
+        ? "/settings"
+        : pathname;
     const section = routeTitles[rootPath] ?? "Page not found";
     const isPublicLanding = pathname === "/";
     const description = isPublicLanding
@@ -234,11 +260,17 @@ function RouteMetadata() {
     setMeta("robots", isPublicLanding ? "index, follow" : "noindex, nofollow");
     setMeta("og:title", `${section} · Budgefi`, "property");
     setMeta("og:description", description, "property");
-    setMeta("og:url", isPublicLanding ? `${SITE_ORIGIN}/` : `${SITE_ORIGIN}${pathname}`, "property");
+    setMeta(
+      "og:url",
+      isPublicLanding ? `${SITE_ORIGIN}/` : `${SITE_ORIGIN}${pathname}`,
+      "property",
+    );
     setMeta("twitter:title", `${section} · Budgefi`);
     setMeta("twitter:description", description);
 
-    const existingCanonical = document.querySelector<HTMLLinkElement>('link[rel="canonical"]');
+    const existingCanonical = document.querySelector<HTMLLinkElement>(
+      'link[rel="canonical"]',
+    );
     if (isPublicLanding) {
       const canonical = existingCanonical ?? document.createElement("link");
       canonical.rel = "canonical";
@@ -269,7 +301,7 @@ function setMeta(
 function RouteLoading() {
   return (
     <div
-      className="paper-grain grid min-h-dvh place-items-center bg-paper p-5"
+      className="app-boot paper-grain grid min-h-dvh place-items-center bg-paper p-5"
       aria-busy="true"
       aria-live="polite"
     >

@@ -574,8 +574,8 @@ function PlanEquation() {
   const rows = [
     ["Observed cash", "$4,230.39"],
     ["Reviewed commitments", "−$2,166.39"],
-    ["Planned savings", "−$500"],
-    ["Keep untouched", "−$280"],
+    ["Goal contributions", "−$500"],
+    ["Cash cushion", "−$280"],
   ];
   return (
     <div className="overflow-hidden rounded-[24px] border border-white/15 bg-white/[.06] p-5">

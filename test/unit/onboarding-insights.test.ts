@@ -7,20 +7,30 @@ const defaultCalibration = {
   includeChase: false,
   includeJoint: false,
   cashProvenance: "user_entered" as const,
-  incomeAmount: 0,
-  incomeFrequency: "biweekly" as const,
-  nextIncomeDate: "",
-  incomeConfirmed: false,
+  rentId: null,
   rentAmount: 0,
   rentDueDate: "",
+  rentRecurrence: "monthly" as const,
+  electricId: null,
   electricMax: 0,
   electricDueDate: "",
+  electricRecurrence: "monthly" as const,
+  streamBoxId: null,
   streamBoxAmount: 0,
   streamBoxDueDate: "",
+  streamBoxRecurrence: "monthly" as const,
+  insuranceId: null,
   insuranceAmount: 0,
   insuranceDueDate: "",
+  insuranceRecurrence: "monthly" as const,
   editedCommitments: [] as string[],
-  customCommitments: [] as { id: string; name: string; amount: number; dueDate: string }[],
+  customCommitments: [] as {
+    id: string;
+    name: string;
+    amount: number;
+    dueDate: string;
+    recurrence: "weekly" | "biweekly" | "monthly" | "quarterly" | "annual";
+  }[],
   savingsContribution: 0,
 };
 
@@ -28,13 +38,26 @@ const recurring = (
   candidateId: string,
   name: string,
   minor: string,
-  category: "housing" | "utilities" | "subscription" | "income" | "savings" | "bill",
+  category:
+    | "housing"
+    | "utilities"
+    | "subscription"
+    | "income"
+    | "savings"
+    | "bill",
+  cadence:
+    | "weekly"
+    | "biweekly"
+    | "semi_monthly"
+    | "monthly"
+    | "quarterly"
+    | "annual" = "monthly",
 ) => ({
   candidateId,
   name,
   amount: { minor, currency: "USD" as const },
   nextExpectedDate: "2026-09-08",
-  cadence: "monthly" as const,
+  cadence,
   category,
   confidence: "strong" as const,
   variableAmount: false,
@@ -52,7 +75,7 @@ function analysis(): OnboardingAnalysisResponse {
     candidateCount: 5,
     notice: "Suggestions ready",
     suggestions: {
-      income: recurring("income", "ACME Payroll", "225000", "income"),
+      incomes: [recurring("income", "ACME Payroll", "225000", "income")],
       savings: recurring("acorns", "Acorns", "2500", "savings"),
       commitments: [
         recurring("rent", "City Apartments", "180000", "housing"),
@@ -66,13 +89,11 @@ function analysis(): OnboardingAnalysisResponse {
 }
 
 describe("onboarding suggestion merge", () => {
-  it("prefills income, bills, dates, and in-horizon savings", () => {
+  it("prefills bills and dates without auto-allocating income or savings", () => {
     const result = applyOnboardingSuggestions(defaultCalibration, analysis());
-    expect(result.incomeAmount).toBe(2250);
-    expect(result.nextIncomeDate).toBe("2026-09-08");
     expect(result.rentAmount).toBe(1800);
     expect(result.electricMax).toBe(142.5);
-    expect(result.savingsContribution).toBe(25);
+    expect(result.savingsContribution).toBe(0);
     expect(result.customCommitments).toEqual([
       expect.objectContaining({ name: "Mobile Co", amount: 85 }),
     ]);
@@ -82,16 +103,35 @@ describe("onboarding suggestion merge", () => {
     const result = applyOnboardingSuggestions(
       {
         ...defaultCalibration,
-        incomeAmount: 999,
         rentAmount: 1200,
         rentDueDate: "2026-09-03",
         savingsContribution: 50,
       },
       analysis(),
     );
-    expect(result.incomeAmount).toBe(999);
     expect(result.rentAmount).toBe(1200);
     expect(result.rentDueDate).toBe("2026-09-03");
     expect(result.savingsContribution).toBe(50);
+  });
+
+  it("preserves annual and quarterly schedules instead of converting them to monthly", () => {
+    const value = analysis();
+    value.suggestions.commitments = [
+      recurring("rent", "City Apartments", "180000", "housing", "annual"),
+      recurring("phone", "Mobile Co", "8500", "bill", "quarterly"),
+    ];
+    const result = applyOnboardingSuggestions(defaultCalibration, value);
+    expect(result.rentRecurrence).toBe("annual");
+    expect(result.customCommitments[0]?.recurrence).toBe("quarterly");
+  });
+
+  it("never auto-saves a twice-monthly suggestion as monthly", () => {
+    const value = analysis();
+    value.suggestions.commitments = [
+      recurring("hoa", "HOA", "9000", "bill", "semi_monthly"),
+    ];
+    expect(
+      applyOnboardingSuggestions(defaultCalibration, value).customCommitments,
+    ).toEqual([]);
   });
 });

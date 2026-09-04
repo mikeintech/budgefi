@@ -32,7 +32,7 @@ await database.destroy();
 
 async function runScheduledJob(): Promise<void> {
   const deadline = Date.now() + maxJobRuntimeMs;
-  await sweep();
+  await sweep(deadline);
   for (
     let processed = 0;
     processed < maxJobItems && Date.now() < deadline && !stopping;
@@ -54,15 +54,57 @@ async function runDaemon(): Promise<void> {
   }
 }
 
-async function sweep(): Promise<void> {
-  await workerCall(sql`select prune_financial_pattern_analyses()`).catch(
-    (error) => console.error("pattern_analysis_prune_failed", safeError(error)),
-  );
+async function sweep(deadline = Number.POSITIVE_INFINITY): Promise<void> {
+  for (
+    let index = 0;
+    index < maxJobItems && Date.now() < deadline && !stopping;
+    index += 1
+  ) {
+    const claimed = await claimScheduleMaintenance();
+    if (!claimed) break;
+    try {
+      await workerCall(
+        sql`select maintain_plan_occurrences(${claimed.household_id}::uuid)`,
+      );
+      await workerCall(
+        sql`select maintain_savings_goal_occurrences(${claimed.household_id}::uuid)`,
+      );
+      await workerCall(
+        sql`select generate_notification_events(${claimed.household_id}::uuid)`,
+      );
+      await workerCall(
+        sql`select generate_available_cash_events(${claimed.household_id}::uuid)`,
+      );
+      await finishScheduleMaintenance(claimed, null);
+    } catch (error) {
+      const code = safeError(error);
+      console.error("schedule_maintenance_failed", code);
+      await finishScheduleMaintenance(claimed, code);
+    }
+  }
+  if (Date.now() < deadline && !stopping)
+    await workerCall(sql`select prune_financial_pattern_analyses()`).catch(
+      (error) =>
+        console.error("pattern_analysis_prune_failed", safeError(error)),
+    );
   // Exception reconciliation runs inside the tenant-scoped ingestion
   // transaction that changed the ledger. A global scan would weaken RLS and
   // duplicate expensive work without improving freshness.
-  await workerCall(sql`select generate_notification_events()`).catch((error) =>
-    console.error("notification_sweep_failed", safeError(error)),
+}
+
+async function claimScheduleMaintenance(): Promise<ScheduleMaintenance | null> {
+  const result = await workerCall(
+    sql<ScheduleMaintenance>`select * from claim_schedule_maintenance()`,
+  );
+  return result.rows[0] ?? null;
+}
+
+async function finishScheduleMaintenance(
+  claim: ScheduleMaintenance,
+  error: string | null,
+) {
+  await workerCall(
+    sql`select finish_schedule_maintenance(${claim.household_id}::uuid,${claim.lease_token}::uuid,${error})`,
   );
 }
 
@@ -87,7 +129,9 @@ async function assertWorkerDatabaseRole(): Promise<void> {
     worker_member: boolean;
     app_member: boolean;
     can_claim: boolean;
+    can_claim_schedule: boolean;
     direct_table_read: boolean;
+    direct_schedule_read: boolean;
   }>`select current_user,
       current_setting('is_superuser')='on' as is_superuser,
       coalesce((select rolbypassrls from pg_roles where rolname=current_user),false) as bypasses_rls,
@@ -95,7 +139,9 @@ async function assertWorkerDatabaseRole(): Promise<void> {
       pg_has_role(current_user,'budgefi_worker','MEMBER') as worker_member,
       pg_has_role(current_user,'budgefi_app','MEMBER') as app_member,
       has_function_privilege('budgefi_worker','claim_notification_delivery()','EXECUTE') as can_claim,
-      has_table_privilege(current_user,'notification_deliveries','SELECT') as direct_table_read`.execute(
+      has_function_privilege('budgefi_worker','claim_schedule_maintenance()','EXECUTE') as can_claim_schedule,
+      has_table_privilege(current_user,'notification_deliveries','SELECT') as direct_table_read,
+      has_table_privilege(current_user,'schedule_maintenance_jobs','SELECT') as direct_schedule_read`.execute(
     database,
   );
   const role = result.rows[0]!;
@@ -106,7 +152,9 @@ async function assertWorkerDatabaseRole(): Promise<void> {
     !role.worker_member ||
     role.app_member ||
     !role.can_claim ||
-    role.direct_table_read
+    !role.can_claim_schedule ||
+    role.direct_table_read ||
+    role.direct_schedule_read
   )
     throw new Error(`Unsafe worker database role ${role.current_user}`);
 }
@@ -141,6 +189,7 @@ async function deliverOne(): Promise<boolean> {
           ? delivery.body
           : "Open Budgefi to review a financial update.",
         delivery.deep_link_path,
+        delivery.delivery_id,
       );
     } else if (delivery.channel === "email" && delivery.email_address)
       await sendEmail(
@@ -148,9 +197,10 @@ async function deliverOne(): Promise<boolean> {
         delivery.title,
         delivery.body,
         delivery.deep_link_path,
+        delivery.delivery_id,
       );
     else throw new Error("delivery_channel_not_configured");
-    await finish(delivery.delivery_id, "sent", null);
+    await finish(delivery.delivery_id, delivery.lease_token, "sent", null);
   } catch (error) {
     const code = safeError(error);
     const permanent =
@@ -163,7 +213,12 @@ async function deliverOne(): Promise<boolean> {
       await workerCall(
         sql`select disable_notification_endpoint(${delivery.endpoint_id}::uuid,${code})`,
       );
-    await finish(delivery.delivery_id, permanent ? "dead" : "retry", code);
+    await finish(
+      delivery.delivery_id,
+      delivery.lease_token,
+      permanent ? "dead" : "retry",
+      code,
+    );
   }
   return true;
 }
@@ -212,6 +267,7 @@ async function sendApns(
   title: string,
   body: string,
   path: string,
+  collapseId: string,
 ): Promise<void> {
   const teamId = required("APNS_TEAM_ID"),
     keyId = required("APNS_KEY_ID"),
@@ -240,6 +296,7 @@ async function sendApns(
       authorization: `bearer ${jwt}`,
       "apns-topic": topic,
       "apns-push-type": "alert",
+      "apns-collapse-id": collapseId,
       "content-type": "application/json",
     });
     let status = 0,
@@ -270,6 +327,7 @@ async function sendEmail(
   subject: string,
   body: string,
   path: string,
+  idempotencyKey: string,
 ): Promise<void> {
   const apiKey = required("RESEND_API_KEY"),
     from = required("NOTIFICATION_FROM_EMAIL"),
@@ -279,6 +337,7 @@ async function sendEmail(
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
+      "Idempotency-Key": idempotencyKey,
     },
     body: JSON.stringify({
       from,
@@ -293,11 +352,12 @@ async function sendEmail(
 
 async function finish(
   id: string,
+  leaseToken: string,
   state: "sent" | "retry" | "dead" | "suppressed",
   error: string | null,
 ) {
   await workerCall(
-    sql`select finish_notification_delivery(${id}::uuid, ${state}, ${error})`,
+    sql`select finish_notification_delivery(${id}::uuid, ${leaseToken}::uuid, ${state}, ${error})`,
   );
 }
 async function workerCall(query: any) {
@@ -330,6 +390,7 @@ function isNotFound(error: unknown): boolean {
 }
 type Delivery = {
   delivery_id: string;
+  lease_token: string;
   household_id: string;
   user_id: string;
   endpoint_id: string | null;
@@ -343,6 +404,10 @@ type Delivery = {
   deep_link_path: string;
   lock_screen_detail: boolean;
   attempts: number;
+};
+type ScheduleMaintenance = {
+  household_id: string;
+  lease_token: string;
 };
 type Deletion = {
   request_id: string;

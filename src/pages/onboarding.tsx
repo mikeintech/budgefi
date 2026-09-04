@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   onboardingAnalysisResponseSchema,
   type OnboardingAnalysisResponse,
@@ -38,6 +38,7 @@ import { enablePushOnThisDevice } from "@/lib/native-notifications";
 import { isNativeApp } from "@/lib/platform";
 import { applyOnboardingSuggestions } from "@/lib/onboarding-insights";
 import { authCacheScope } from "@/lib/auth";
+import { within } from "@/lib/async-timeout";
 import {
   createOnboardingDraftEnvelope,
   onboardingDraftKey,
@@ -94,7 +95,6 @@ function validPlanDraft(
   if (!plan || !finiteNonnegative(value.buffer)) return false;
   const amounts = [
     plan.knownCash,
-    plan.incomeAmount,
     plan.rentAmount,
     plan.electricMax,
     plan.streamBoxAmount,
@@ -106,10 +106,6 @@ function validPlanDraft(
     typeof plan.includeChase === "boolean" &&
     typeof plan.includeJoint === "boolean" &&
     ["observed", "user_entered"].includes(String(plan.cashProvenance)) &&
-    ["weekly", "biweekly", "semi_monthly", "monthly", "irregular"].includes(
-      String(plan.incomeFrequency),
-    ) &&
-    typeof plan.incomeConfirmed === "boolean" &&
     [
       plan.rentName,
       plan.electricName,
@@ -117,7 +113,6 @@ function validPlanDraft(
       plan.insuranceName,
     ].every((item) => item === undefined || typeof item === "string") &&
     [
-      plan.nextIncomeDate,
       plan.rentDueDate,
       plan.electricDueDate,
       plan.streamBoxDueDate,
@@ -188,6 +183,8 @@ export function OnboardingPage() {
   const [draftStorageKey, setDraftStorageKey] = useState<string | null>(null);
   const [draftScope, setDraftScope] = useState<string | null>(null);
   const [alertMessage, setAlertMessage] = useState("");
+  const [alertsSaving, setAlertsSaving] = useState(false);
+  const alertsSavingRef = useRef(false);
   const visibleStep = Math.max(
     0,
     visibleSteps.findIndex(({ index }) => index === step),
@@ -205,21 +202,30 @@ export function OnboardingPage() {
       !state.revision
     )
       return;
+    let cancelled = false;
+    const householdId = state.householdId;
+    const revision = state.revision;
     void authCacheScope()
       .then(async (scope) => {
-        if (!scope) return;
-        const key = onboardingDraftKey(scope, state.householdId!);
+        if (!scope || cancelled) return;
+        const key = onboardingDraftKey(scope, householdId);
+        if (cancelled) return;
         setDraftStorageKey(key);
         setDraftScope(scope);
         const raw = isNativeApp
-          ? await nativeSecureGet<string>(key)
+          ? await within(
+              nativeSecureGet<string>(key),
+              5_000,
+              "Saved setup took too long to load",
+            )
           : sessionStorage.getItem(key);
+        if (cancelled) return;
         if (!raw) return;
         const parsed = parseOnboardingDraftEnvelope<OnboardingDraft>(
           raw,
           scope,
-          state.householdId!,
-          state.revision!,
+          householdId,
+          revision,
         );
         if (parsed.status !== "ready" || !validDraft(parsed.draft)) {
           if (isNativeApp) await nativeSecureRemove(key);
@@ -240,6 +246,7 @@ export function OnboardingPage() {
       })
       .catch(() => undefined)
       .finally(() => {
+        if (cancelled) return;
         if (isNativeApp)
           void nativeSecureRemove(legacyOnboardingStorageKey).catch(
             () => undefined,
@@ -247,6 +254,9 @@ export function OnboardingPage() {
         else sessionStorage.removeItem(legacyOnboardingStorageKey);
         setDraftReady(true);
       });
+    return () => {
+      cancelled = true;
+    };
   }, [
     draftReady,
     householdModeEnabled,
@@ -305,11 +315,11 @@ export function OnboardingPage() {
   ]);
   useEffect(() => {
     if (state.backendStatus !== "connected") return;
-    const connectedMode = plaidConnection ? "connected" : state.dataMode;
-    setDataModeDraft(connectedMode);
-    setConnectionDraft(connectedMode !== "manual");
+    const workspaceMode = state.dataMode;
+    setDataModeDraft(workspaceMode);
+    setConnectionDraft(workspaceMode !== "manual");
     if (step === 2) {
-      if (connectedMode === "connected") setConnectionPhase("done");
+      if (workspaceMode === "connected") setConnectionPhase("done");
       else if (connectionPhase === "done") setConnectionPhase("choose");
     }
   }, [
@@ -384,7 +394,7 @@ export function OnboardingPage() {
         notice:
           "Automatic setup is temporarily unavailable. You can continue and enter or review every value manually.",
         suggestions: {
-          income: null,
+          incomes: [],
           commitments: [],
           savings: null,
           needsReview: [],
@@ -414,32 +424,44 @@ export function OnboardingPage() {
     navigate("/today");
   };
   const saveAlerts = async () => {
+    if (alertsSavingRef.current) return;
+    alertsSavingRef.current = true;
+    setAlertsSaving(true);
     setAlertMessage("");
     try {
       const prefs = await api.notificationPreferences();
+      const remindersEnabled = notificationDraft === "all";
       let pushEnabled = false;
-      if (isNativeApp) {
+      if (isNativeApp && remindersEnabled) {
         const result = await enablePushOnThisDevice();
         pushEnabled = result.okay;
         if (!result.okay) setAlertMessage(result.message);
       }
-      const { emailVerified: _, ...update } = prefs;
+      const { emailVerified: _, version, ...update } = prefs;
+      const deviceTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
       await api.updateNotificationPreferences({
         ...update,
+        expectedVersion: version,
         pushEnabled,
-        connectionHealth: notificationDraft !== "exceptions",
-        commitmentReminders: notificationDraft === "all",
-        exceptionActivity: true,
-        weeklyDigest: digestDraft,
+        connectionHealth: remindersEnabled,
+        commitmentReminders: remindersEnabled,
+        incomeReminders: remindersEnabled,
+        savingsReminders: remindersEnabled,
+        exceptionActivity: remindersEnabled,
+        weeklyDigest: remindersEnabled && digestDraft,
+        timezone: deviceTimezone || update.timezone,
         requestId: requestId(),
       });
-      if (pushEnabled || !isNativeApp) next();
+      if (!remindersEnabled || pushEnabled || !isNativeApp) next();
     } catch (error) {
       setAlertMessage(
         error instanceof Error
           ? error.message
           : "Notification choices could not be saved",
       );
+    } finally {
+      alertsSavingRef.current = false;
+      setAlertsSaving(false);
     }
   };
 
@@ -456,6 +478,13 @@ export function OnboardingPage() {
             onRetry={state.reloadBackend}
           />
         </div>
+      </div>
+    );
+
+  if (!draftReady)
+    return (
+      <div className="app-boot grid min-h-dvh place-items-center bg-paper text-sm font-semibold text-muted">
+        Restoring your setup…
       </div>
     );
 
@@ -568,11 +597,10 @@ export function OnboardingPage() {
             <Alerts
               mode={notificationDraft}
               setMode={setNotificationDraft}
-              digest={digestDraft}
-              setDigest={setDigestDraft}
               onNext={saveAlerts}
               onSkip={next}
               message={alertMessage}
+              saving={alertsSaving}
             />
           )}
           {step === 5 && (
@@ -705,6 +733,7 @@ function Connection({
     "createPlaidLinkToken" | "exchangePlaid" | "completePlaidUpdate"
   >;
 }) {
+  const { transactions } = useAppState();
   const [checkingAccounts, setCheckingAccounts] = useState(false);
   const [accountCheckMessage, setAccountCheckMessage] = useState("");
   const checkAccounts = async () => {
@@ -788,6 +817,23 @@ function Connection({
             )}
           </div>
         )}
+        {realConnection?.historicalUpdateComplete &&
+          transactions.length > 0 && (
+            <div className="mt-3 rounded-2xl bg-recessed p-4">
+              <strong className="block text-sm">
+                {transactions.length} recent transactions organized
+              </strong>
+              <p className="mt-1 text-xs text-muted">
+                {
+                  transactions.filter(
+                    (item) => item.category === "uncategorized",
+                  ).length
+                }{" "}
+                may need a category. This is optional and can be changed later
+                in Activity.
+              </p>
+            </div>
+          )}
         {analysisEnabled && (
           <div className="mt-5 rounded-2xl border border-pencil/15 bg-pencil/[.035] p-4">
             <div className="flex items-start gap-3">
@@ -894,6 +940,10 @@ function Connection({
         Connect a bank or enter everything yourself. You will review each
         account and commitment before it affects the plan.
       </p>
+      <p className="mt-3 rounded-xl bg-recessed p-3 text-sm leading-5">
+        We’ll organize transactions as they arrive. Categories are optional, and
+        you can change anything later.
+      </p>
       <div className="mt-6 space-y-3">
         <div className="rounded-[20px] border border-pencil/20 bg-white p-3 shadow-sm">
           <div className="mb-3 flex items-center gap-3 px-1">
@@ -940,64 +990,45 @@ function Connection({
 function Alerts({
   mode,
   setMode,
-  digest,
-  setDigest,
   onNext,
   onSkip,
   message,
+  saving,
 }: {
   mode: NotificationMode;
   setMode: (value: NotificationMode) => void;
-  digest: boolean;
-  setDigest: (value: boolean) => void;
   onNext: () => Promise<void>;
   onSkip: () => void;
   message: string;
+  saving: boolean;
 }) {
   return (
     <div className="flex flex-1 flex-col">
-      <p className="eyebrow">Your attention</p>
+      <p className="eyebrow">Helpful reminders</p>
       <h1 className="text-[32px] font-bold leading-tight tracking-[-0.045em]">
-        What is worth an interruption?
+        Stay ahead without extra setup
       </h1>
       <p className="mt-2 text-sm leading-5 text-muted">
-        Choose the events Budgefi may send. Your phone asks for permission only
-        after you continue.
+        Important financial exceptions always stay visible in Budgefi. You can
+        also get a calm reminder before items in your plan.
       </p>
-      <RadioGroup
-        value={mode}
-        onValueChange={(v) => setMode(v as NotificationMode)}
-        className="mt-6 space-y-2"
-      >
-        <PlainChoice
-          value="exceptions"
-          title="Decisions only"
-          description="Financial exceptions that need an answer"
-        />
-        <PlainChoice
-          value="daily"
-          title="Decisions and connection health"
-          description="Also warn when account data needs attention"
-        />
-        <PlainChoice
-          value="all"
-          title="Add commitment reminders"
-          description="Also remind me before upcoming commitments"
-        />
-      </RadioGroup>
-      <div className="mt-4 flex items-center justify-between rounded-2xl border border-rule bg-white p-4">
+      <div className="mt-6 flex items-center justify-between gap-4 rounded-2xl border border-pencil/25 bg-white p-4">
         <span>
-          <strong className="block text-sm">Weekly proof digest</strong>
+          <strong className="block text-sm">Send me helpful reminders</strong>
           <span className="mt-0.5 block text-xs text-muted">
-            A calm summary of meaningful changes
+            Bills, income, savings, account issues, and a weekly summary
           </span>
         </span>
         <Switch
-          checked={digest}
-          onCheckedChange={setDigest}
-          label="Weekly proof digest"
+          checked={mode === "all"}
+          onCheckedChange={(checked) => setMode(checked ? "all" : "exceptions")}
+          label="Send me helpful reminders"
         />
       </div>
+      <p className="mt-3 text-xs leading-5 text-muted">
+        Turn this off to receive no email or push alerts. In-app updates still
+        remain visible. You can change individual reminder types in Settings.
+      </p>
       {message && (
         <p
           className="mt-3 rounded-2xl bg-recessed p-3 text-xs leading-5"
@@ -1007,8 +1038,13 @@ function Alerts({
         </p>
       )}
       <div className="mt-auto space-y-2">
-        <Button onClick={() => void onNext()} size="lg" className="w-full">
-          {message ? "Try again" : "Save and continue"}{" "}
+        <Button
+          onClick={() => void onNext()}
+          size="lg"
+          className="w-full"
+          disabled={saving}
+        >
+          {saving ? "Saving…" : message ? "Try again" : "Save and continue"}{" "}
           <ChevronRight className="size-4" />
         </Button>
         {message && (
@@ -1101,8 +1137,12 @@ function Ready({
           {mode === "manual"
             ? "the cash and bills you entered"
             : "included deposit accounts"}
-          , {commitmentCount} reviewed commitments, no future income, planned
-          savings, and the cash you chose to keep untouched.
+          , {commitmentCount} reviewed commitments, future income not counted as
+          cash, active goal contributions, and your optional cash cushion.
+        </p>
+        <p className="mx-auto mt-2 max-w-[320px] text-xs leading-5 text-muted">
+          Expected paydays guide the plan only. Pay-cycle history begins after a
+          regular deposit and later balance are confirmed.
         </p>
       </div>
       <div className="mt-7 divide-y divide-rule overflow-hidden rounded-[20px] border border-rule bg-white">

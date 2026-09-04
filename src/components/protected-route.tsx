@@ -12,7 +12,7 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
 function ClerkRoute({ children }: { children: React.ReactNode }) {
   const { isLoaded, isSignedIn } = useAuth();
   const location = useLocation();
-  if (!isLoaded) return <div className="paper-grain grid min-h-dvh place-items-center bg-paper p-5" aria-live="polite"><div className="w-full max-w-[390px] rounded-[24px] border border-rule bg-sheet p-6 text-center shadow-sheet"><ShieldCheck className="mx-auto size-7 text-pencil"/><h1 className="mt-4 text-xl font-bold">Opening Budgefi</h1><p className="mt-2 text-sm text-muted">Your plan will appear when your account is ready.</p></div></div>;
+  if (!isLoaded) return <div className="app-boot paper-grain grid min-h-dvh place-items-center bg-paper p-5" aria-live="polite"><div className="w-full max-w-[390px] rounded-[24px] border border-rule bg-sheet p-6 text-center shadow-sheet"><ShieldCheck className="mx-auto size-7 text-pencil"/><h1 className="mt-4 text-xl font-bold">Opening Budgefi</h1><p className="mt-2 text-sm text-muted">Your plan will appear when your account is ready.</p></div></div>;
   if (!isSignedIn) return <Navigate to="/sign-in" replace state={{ from: `${location.pathname}${location.search}` }} />;
   return children;
 }

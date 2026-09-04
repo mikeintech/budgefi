@@ -401,14 +401,13 @@ export function HealthSheet({ children }: { children: React.ReactNode }) {
                 !manual &&
                 account.provenance === "manual" &&
                 account.includeInPlan &&
-                (account.coverage === "stale" ||
-                  account.coverage === "missing")
+                (account.coverage === "stale" || account.coverage === "missing")
                   ? "Included in plan · add a manual balance or remove it"
-                  : account.includeInPlan
-                  ? "Included in observed cash"
-                  : account.type === "credit"
-                    ? "Activity only"
-                    : "Protected from plan"
+                  : account.planningRole === "spendable"
+                    ? "Included in observed cash"
+                    : account.planningRole === "protected"
+                      ? "Protected savings · excluded from spendable cash"
+                      : "Excluded from plan"
               }
               stale={
                 account.coverage === "stale" || account.coverage === "missing"

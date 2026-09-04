@@ -187,7 +187,7 @@ function AuthTokenBridge({ children }: { children: React.ReactNode }) {
     cleanupPending
   )
     return (
-      <div className="grid min-h-dvh place-items-center bg-paper text-sm font-semibold text-muted">
+      <div className="app-boot grid min-h-dvh place-items-center bg-paper text-sm font-semibold text-muted">
         Opening Budgefi…
       </div>
     );

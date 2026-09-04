@@ -18,6 +18,7 @@ export function appPathFromUrl(rawUrl: string): string | null {
       "/review",
       "/plan",
       "/activity",
+      "/pay-cycles",
       "/more",
       "/connections",
       "/manual",
@@ -27,7 +28,7 @@ export function appPathFromUrl(rawUrl: string): string | null {
       "/sign-up",
     ];
     return allowed.some(
-      (prefix) => candidate === prefix || candidate.startsWith(`${prefix}/`)
+      (prefix) => candidate === prefix || candidate.startsWith(`${prefix}/`),
     )
       ? `${candidate}${url.search}`
       : null;

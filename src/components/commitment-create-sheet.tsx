@@ -11,6 +11,8 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { useAppState } from "@/state/app-state";
+import type { CommitmentRecurrence } from "@/state/app-state";
+import { SchedulePreview } from "@/components/schedule-preview";
 
 export function CommitmentCreateSheet() {
   const state = useAppState();
@@ -18,6 +20,7 @@ export function CommitmentCreateSheet() {
   const [name, setName] = useState("");
   const [amount, setAmount] = useState(0);
   const [dueDate, setDueDate] = useState("");
+  const [recurrence, setRecurrence] = useState<CommitmentRecurrence>("monthly");
   const [saving, setSaving] = useState(false);
   const normalizedName = name.trim().toLocaleLowerCase();
   const nameTaken = state.commitments.some(
@@ -28,10 +31,16 @@ export function CommitmentCreateSheet() {
     setName("");
     setAmount(0);
     setDueDate("");
+    setRecurrence("monthly");
   };
   const save = async () => {
     setSaving(true);
-    const okay = await state.addManualCommitment(name, amount, dueDate);
+    const okay = await state.addManualCommitment(
+      name,
+      amount,
+      dueDate,
+      recurrence,
+    );
     setSaving(false);
     if (okay) {
       reset();
@@ -53,7 +62,10 @@ export function CommitmentCreateSheet() {
           Add
         </Button>
       </SheetTrigger>
-      <SheetContent side="bottom" className="mx-auto max-w-[430px] rounded-t-[28px]">
+      <SheetContent
+        side="bottom"
+        className="mx-auto max-w-[430px] rounded-t-[28px]"
+      >
         <SheetHeader>
           <SheetTitle>Add commitment</SheetTitle>
           <SheetDescription>
@@ -62,7 +74,10 @@ export function CommitmentCreateSheet() {
           </SheetDescription>
         </SheetHeader>
 
-        <label className="block text-sm font-semibold" htmlFor="new-commitment-name">
+        <label
+          className="block text-sm font-semibold"
+          htmlFor="new-commitment-name"
+        >
           Name
         </label>
         <input
@@ -79,7 +94,10 @@ export function CommitmentCreateSheet() {
           </p>
         )}
 
-        <label className="mt-5 block text-sm font-semibold" htmlFor="new-commitment-amount">
+        <label
+          className="mt-5 block text-sm font-semibold"
+          htmlFor="new-commitment-amount"
+        >
           Expected amount
         </label>
         <div className="mt-2 flex h-12 items-center rounded-xl border border-rule bg-white px-3 focus-within:ring-2 focus-within:ring-pencil">
@@ -95,7 +113,10 @@ export function CommitmentCreateSheet() {
           />
         </div>
 
-        <label className="mt-4 block text-sm font-semibold" htmlFor="new-commitment-date">
+        <label
+          className="mt-4 block text-sm font-semibold"
+          htmlFor="new-commitment-date"
+        >
           Due date <span className="font-normal text-muted">(optional)</span>
         </label>
         <input
@@ -109,6 +130,28 @@ export function CommitmentCreateSheet() {
           Without a date, Budgefi tracks the commitment but does not reserve it
           from available cash yet.
         </p>
+        <label
+          className="mt-4 block text-sm font-semibold"
+          htmlFor="new-commitment-repeat"
+        >
+          Repeats
+        </label>
+        <select
+          id="new-commitment-repeat"
+          value={recurrence}
+          onChange={(event) =>
+            setRecurrence(event.target.value as CommitmentRecurrence)
+          }
+          className="mt-2 h-12 w-full rounded-xl border border-rule bg-white px-3 text-base outline-none focus:ring-2 focus:ring-pencil"
+        >
+          <option value="one_time">One time</option>
+          <option value="weekly">Weekly</option>
+          <option value="biweekly">Every two weeks</option>
+          <option value="monthly">Monthly</option>
+          <option value="quarterly">Every three months</option>
+          <option value="annual">Yearly</option>
+        </select>
+        <SchedulePreview firstDate={dueDate} cadence={recurrence} />
 
         <Button
           disabled={saving || !name.trim() || nameTaken || amount <= 0}

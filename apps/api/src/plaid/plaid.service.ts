@@ -30,10 +30,17 @@ import {
 } from "../../../../packages/contracts/src/index.js";
 import type { Database } from "../../../../packages/database/src/index.js";
 import {
+  activatePendingSavingsTrackingForConnection,
   addActivity,
   buildBootstrap,
   bumpRevision,
+  detachSavingsGoalsForConnection,
+  detachIncomeSchedulesForConnection,
+  detachIncomeSchedulesForAccounts,
+  pauseDebtTrackingForConnection,
+  pauseDebtTrackingForAccounts,
   persistSnapshot,
+  reconcilePlanEvidence,
   requireEditor,
 } from "../core/core.service.js";
 import { DATABASE } from "../database/database.token.js";
@@ -158,7 +165,10 @@ export class PlaidService implements OnModuleInit, OnModuleDestroy {
         };
       },
     );
-    if (request.nativeHosted && !this.config.redirectUri?.startsWith("https://"))
+    if (
+      request.nativeHosted &&
+      !this.config.redirectUri?.startsWith("https://")
+    )
       throw new ServiceUnavailableException(
         "Mobile bank connections require an HTTPS PLAID_REDIRECT_URI registered with Plaid",
       );
@@ -169,10 +179,14 @@ export class PlaidService implements OnModuleInit, OnModuleDestroy {
       clientUserId: context.principal.userId,
       mode: request.mode,
       ...(context.accessToken ? { accessToken: context.accessToken } : {}),
-      ...(request.nativeHosted ? { nativeCompletionUri: completionUri.toString() } : {}),
+      ...(request.nativeHosted
+        ? { nativeCompletionUri: completionUri.toString() }
+        : {}),
     });
     if (request.nativeHosted && !created.hostedLinkUrl)
-      throw new ServiceUnavailableException("Plaid did not return a Hosted Link URL");
+      throw new ServiceUnavailableException(
+        "Plaid did not return a Hosted Link URL",
+      );
     const expiration = new Date(created.expiration);
     if (!Number.isFinite(expiration.getTime()))
       throw new Error("Plaid returned an invalid Link expiration");
@@ -213,7 +227,9 @@ export class PlaidService implements OnModuleInit, OnModuleDestroy {
       expiration: expiration.toISOString(),
       environment: this.config.environment,
       mode: request.mode,
-      ...(created.hostedLinkUrl ? { hostedLinkUrl: created.hostedLinkUrl } : {}),
+      ...(created.hostedLinkUrl
+        ? { hostedLinkUrl: created.hostedLinkUrl }
+        : {}),
     });
   }
 
@@ -233,34 +249,60 @@ export class PlaidService implements OnModuleInit, OnModuleDestroy {
           .where("user_id", "=", principal.userId)
           .where("id", "=", request.sessionId)
           .executeTakeFirst();
-        if (!session) throw new NotFoundException("Hosted Link session was not found");
-        if (!session.link_token_hash || !safeHashEqual(session.link_token_hash, sha256(request.linkToken)))
-          throw new ForbiddenException("Hosted Link token does not match this session");
+        if (!session)
+          throw new NotFoundException("Hosted Link session was not found");
+        if (
+          !session.link_token_hash ||
+          !safeHashEqual(session.link_token_hash, sha256(request.linkToken))
+        )
+          throw new ForbiddenException(
+            "Hosted Link token does not match this session",
+          );
         if (session.expires_at.getTime() <= Date.now())
-          throw new ConflictException("Hosted Link session expired; start a new connection");
+          throw new ConflictException(
+            "Hosted Link session expired; start a new connection",
+          );
         if (session.status === "failed" || session.status === "expired")
-          throw new ConflictException("Hosted Link session can no longer be completed");
-        return session.mode === "update" ? "update" as const : "create" as const;
+          throw new ConflictException(
+            "Hosted Link session can no longer be completed",
+          );
+        return session.mode === "update"
+          ? ("update" as const)
+          : ("create" as const);
       },
     );
-    const completion = await this.gateway.getHostedCompletion(request.linkToken);
+    const completion = await this.gateway.getHostedCompletion(
+      request.linkToken,
+    );
     if (completion.state === "pending")
-      throw new ConflictException("Plaid is still finalizing the bank connection; try again in a moment");
+      throw new ConflictException(
+        "Plaid is still finalizing the bank connection; try again in a moment",
+      );
     if (completion.state === "exit")
-      throw new BadRequestException("The bank connection was closed before it finished");
+      throw new BadRequestException(
+        "The bank connection was closed before it finished",
+      );
     if (mode === "update")
       return this.completeUpdate(identity, {
         sessionId: request.sessionId,
-        ...(completion.linkSessionId ? { linkSessionId: completion.linkSessionId } : {}),
+        ...(completion.linkSessionId
+          ? { linkSessionId: completion.linkSessionId }
+          : {}),
         requestId: request.requestId,
       });
     if (!completion.publicToken)
-      throw new ServiceUnavailableException("Plaid finished without returning an account token");
+      throw new ServiceUnavailableException(
+        "Plaid finished without returning an account token",
+      );
     return this.exchange(identity, {
       sessionId: request.sessionId,
       publicToken: completion.publicToken,
-      ...(completion.linkSessionId ? { linkSessionId: completion.linkSessionId } : {}),
-      ...(completion.institution ? { institution: completion.institution } : {}),
+      ...(completion.linkSessionId
+        ? { linkSessionId: completion.linkSessionId }
+        : {}),
+      ...(completion.institution
+        ? { institution: completion.institution }
+        : {}),
       requestId: request.requestId,
     });
   }
@@ -589,56 +631,60 @@ export class PlaidService implements OnModuleInit, OnModuleDestroy {
     identity: RequestIdentity,
     connectionId: string,
   ): Promise<BootstrapResponse> {
-    await this.tenantDatabase.run(
-      identity,
-      async (transaction, principal) => {
-        requireEditor(principal);
-        const connection = await transaction
-          .selectFrom("connections")
-          .selectAll()
-          .where("household_id", "=", principal.householdId)
-          .where("id", "=", connectionId)
-          .where("provider", "=", "plaid")
-          .where("status", "!=", "revoked")
-          .forUpdate()
-          .executeTakeFirst();
-        if (
-          !connection?.encrypted_access_token ||
-          !connection.token_key_id ||
-          !connection.environment
-        )
-          throw new NotFoundException("Active Plaid connection not found");
-        await transaction
-          .updateTable("connections")
-          .set({
-            status: "revocation_pending",
-            error_code: null,
-            updated_at: new Date(),
-          })
-          .where("id", "=", connection.id)
-          .execute();
-        await transaction
-          .updateTable("accounts")
-          .set((eb) => ({
-            include_in_plan: false,
-            version: eb("version", "+", 1),
-          }))
-          .where("household_id", "=", principal.householdId)
-          .where("connection_id", "=", connection.id)
-          .where("archived_at", "is", null)
-          .execute();
-        await persistSnapshot(transaction, principal);
-        await bumpRevision(transaction, principal);
-        await enqueueSyncJob(
-          transaction,
-          principal.householdId,
-          connection.id,
-          "manual",
-          null,
-          "revoke",
-        );
-      },
-    );
+    await this.tenantDatabase.run(identity, async (transaction, principal) => {
+      requireEditor(principal);
+      const connection = await transaction
+        .selectFrom("connections")
+        .selectAll()
+        .where("household_id", "=", principal.householdId)
+        .where("id", "=", connectionId)
+        .where("provider", "=", "plaid")
+        .where("status", "!=", "revoked")
+        .forUpdate()
+        .executeTakeFirst();
+      if (
+        !connection?.encrypted_access_token ||
+        !connection.token_key_id ||
+        !connection.environment
+      )
+        throw new NotFoundException("Active Plaid connection not found");
+      await detachSavingsGoalsForConnection(
+        transaction,
+        principal,
+        connection.id,
+      );
+      await detachIncomeSchedulesForConnection(transaction, principal, connection.id);
+      await pauseDebtTrackingForConnection(transaction, principal, connection.id);
+      await transaction
+        .updateTable("connections")
+        .set({
+          status: "revocation_pending",
+          error_code: null,
+          updated_at: new Date(),
+        })
+        .where("id", "=", connection.id)
+        .execute();
+      await transaction
+        .updateTable("accounts")
+        .set((eb) => ({
+          include_in_plan: false,
+          version: eb("version", "+", 1),
+        }))
+        .where("household_id", "=", principal.householdId)
+        .where("connection_id", "=", connection.id)
+        .where("archived_at", "is", null)
+        .execute();
+      await persistSnapshot(transaction, principal, { externalEligible: true });
+      await bumpRevision(transaction, principal);
+      await enqueueSyncJob(
+        transaction,
+        principal.householdId,
+        connection.id,
+        "manual",
+        null,
+        "revoke",
+      );
+    });
     return this.getBootstrap(identity);
   }
 
@@ -659,13 +705,18 @@ export class PlaidService implements OnModuleInit, OnModuleDestroy {
     const plaidError = isRecord(payload.error)
       ? stringField(payload.error, "error_code")
       : null;
-    const result = await this.database.transaction().execute(async (transaction) => {
-      await sql`set local role budgefi_app`.execute(transaction);
-      return sql<{ known: boolean; duplicate: boolean }>`select * from ingest_verified_plaid_webhook(
+    const result = await this.database
+      .transaction()
+      .execute(async (transaction) => {
+        await sql`set local role budgefi_app`.execute(transaction);
+        return sql<{
+          known: boolean;
+          duplicate: boolean;
+        }>`select * from ingest_verified_plaid_webhook(
         ${itemId},${environment},${eventType},${eventCode},${verified.payloadHash},
         ${verified.keyId},${verified.issuedAt},${plaidError}
       )`.execute(transaction);
-    });
+      });
     return { accepted: true, duplicate: result.rows[0]?.duplicate ?? false };
   }
 
@@ -711,10 +762,10 @@ export class PlaidService implements OnModuleInit, OnModuleDestroy {
               : null,
           stackFrames:
             error instanceof Error
-              ? error.stack
+              ? (error.stack
                   ?.split("\n")
                   .slice(1, 7)
-                  .map((frame) => frame.trim()) ?? null
+                  .map((frame) => frame.trim()) ?? null)
               : null,
         }),
       );
@@ -734,9 +785,9 @@ export class PlaidService implements OnModuleInit, OnModuleDestroy {
   async scheduleMaintenance(): Promise<number> {
     return this.database.transaction().execute(async (transaction) => {
       await sql`set local role budgefi_plaid_worker`.execute(transaction);
-      const result = await sql<{ count: number }>`select schedule_plaid_maintenance() as count`.execute(
-        transaction,
-      );
+      const result = await sql<{
+        count: number;
+      }>`select schedule_plaid_maintenance() as count`.execute(transaction);
       return Number(result.rows[0]?.count ?? 0);
     });
   }
@@ -772,10 +823,6 @@ export class PlaidService implements OnModuleInit, OnModuleDestroy {
           .execute();
       },
     );
-    const accounts = await this.gateway.getAccounts(accessToken);
-    const resolvedInstitutionName = accounts.institutionId
-      ? await this.gateway.getInstitutionName(accounts.institutionId)
-      : null;
     let pages: PlaidSyncPage[];
     try {
       pages = await this.fetchAllPages(accessToken, secret.cursor);
@@ -783,16 +830,29 @@ export class PlaidService implements OnModuleInit, OnModuleDestroy {
       // Accounts and balances are available independently from the Transactions
       // product. Preserve that verified observation even when transaction
       // history is still warming up or temporarily unavailable.
+      const accounts = await this.gateway.getAccounts(accessToken);
+      const liabilities = await this.gateway.getLiabilities(accessToken).catch(() => null);
+      const resolvedInstitutionName = accounts.institutionId
+        ? await this.gateway.getInstitutionName(accounts.institutionId)
+        : null;
       const duplicateRetired = await this.persistAccountsWhileTransactionsWait(
         job,
         syncRunId,
         secret.cursor,
         accounts,
+        liabilities,
         resolvedInstitutionName,
       );
       if (duplicateRetired) return syncRunId;
       throw error;
     }
+    // Fetch balances after transaction pages. A match may release a reserve only
+    // when this later provider observation is stored as reflection evidence.
+    const accounts = await this.gateway.getAccounts(accessToken);
+    const liabilities = await this.gateway.getLiabilities(accessToken).catch(() => null);
+    const resolvedInstitutionName = accounts.institutionId
+      ? await this.gateway.getInstitutionName(accounts.institutionId)
+      : null;
     const added = pages.flatMap((page) => page.added);
     const modified = pages.flatMap((page) => page.modified);
     const removed = pages.flatMap((page) => page.removed);
@@ -845,6 +905,7 @@ export class PlaidService implements OnModuleInit, OnModuleDestroy {
           accounts.accounts,
           accounts.requestId,
           new Date(),
+          liabilities,
         );
         const accountMap = new Map(
           (
@@ -876,6 +937,13 @@ export class PlaidService implements OnModuleInit, OnModuleDestroy {
             job.householdId,
             transactionItem.transaction_id,
           );
+        if (finalPage.updateStatus === "HISTORICAL_UPDATE_COMPLETE")
+          await activatePendingSavingsTrackingForConnection(
+            transaction,
+            principal,
+            job.connectionId,
+          );
+        await reconcilePlanEvidence(transaction, principal);
         await sql`select refresh_financial_exceptions(${job.householdId}::uuid)`.execute(
           transaction,
         );
@@ -923,7 +991,9 @@ export class PlaidService implements OnModuleInit, OnModuleDestroy {
           "connection",
           current.id,
         );
-        await persistSnapshot(transaction, principal);
+        await persistSnapshot(transaction, principal, {
+          externalEligible: true,
+        });
         await bumpRevision(transaction, principal);
         return false;
       },
@@ -937,6 +1007,7 @@ export class PlaidService implements OnModuleInit, OnModuleDestroy {
     syncRunId: string,
     expectedCursor: string | null,
     accounts: Awaited<ReturnType<PlaidGateway["getAccounts"]>>,
+    liabilities: Awaited<ReturnType<PlaidGateway["getLiabilities"]>>,
     resolvedInstitutionName: string | null,
   ): Promise<boolean> {
     return this.tenantDatabase.runSystemHousehold(
@@ -987,6 +1058,7 @@ export class PlaidService implements OnModuleInit, OnModuleDestroy {
           accounts.accounts,
           accounts.requestId,
           observedAt,
+          liabilities,
         );
         await transaction
           .updateTable("connections")
@@ -999,7 +1071,9 @@ export class PlaidService implements OnModuleInit, OnModuleDestroy {
           })
           .where("id", "=", current.id)
           .execute();
-        await persistSnapshot(transaction, principal);
+        await persistSnapshot(transaction, principal, {
+          externalEligible: true,
+        });
         await bumpRevision(transaction, principal);
         return false;
       },
@@ -1491,7 +1565,7 @@ async function finalizeRevocationInTransaction(
     "connection",
     connectionId,
   );
-  await persistSnapshot(transaction, principal);
+  await persistSnapshot(transaction, principal, { externalEligible: true });
   await bumpRevision(transaction, principal);
 }
 
@@ -1504,22 +1578,22 @@ async function enqueueSyncJob(
   operation: "sync" | "revoke",
 ): Promise<string> {
   const inserted = await transaction
-      .insertInto("plaid_sync_jobs")
-      .values({
-        household_id: householdId,
-        connection_id: connectionId,
-        webhook_receipt_id: webhookReceiptId,
-        operation,
-        trigger,
-        state: "queued",
-        available_at: sql<Date>`now()`,
-        locked_at: null,
-        completed_at: null,
-        last_error_code: null,
-      })
-      .onConflict((oc) => oc.doNothing())
-      .returning("id")
-      .executeTakeFirst();
+    .insertInto("plaid_sync_jobs")
+    .values({
+      household_id: householdId,
+      connection_id: connectionId,
+      webhook_receipt_id: webhookReceiptId,
+      operation,
+      trigger,
+      state: "queued",
+      available_at: sql<Date>`now()`,
+      locked_at: null,
+      completed_at: null,
+      last_error_code: null,
+    })
+    .onConflict((oc) => oc.doNothing())
+    .returning("id")
+    .executeTakeFirst();
   if (inserted) return inserted.id;
   const existing = await transaction
     .selectFrom("plaid_sync_jobs")
@@ -1579,8 +1653,7 @@ async function resolveDuplicatePlaidItem(
     return { retireCurrent: false };
 
   const institutionId = observedInstitutionId ?? current.institution_id;
-  const institutionName =
-    observedInstitutionName ?? current.institution_name;
+  const institutionName = observedInstitutionName ?? current.institution_name;
   let candidates = transaction
     .selectFrom("connections")
     .select([
@@ -1612,11 +1685,7 @@ async function resolveDuplicatePlaidItem(
   for (const candidate of await candidates.execute()) {
     const stored = await transaction
       .selectFrom("accounts")
-      .select([
-        "name",
-        "account_type",
-        "provider_account_fingerprint",
-      ])
+      .select(["name", "account_type", "provider_account_fingerprint"])
       .where("household_id", "=", principal.householdId)
       .where("connection_id", "=", candidate.id)
       .where("provenance", "=", "plaid")
@@ -1635,8 +1704,9 @@ async function resolveDuplicatePlaidItem(
       sameStringSet(storedFingerprints, incomingFingerprints);
     const fallbackMatch = sameStringSet(
       sortedUnique(
-        stored.map((account) =>
-          `${account.name.trim().toLowerCase()}|${account.account_type}`,
+        stored.map(
+          (account) =>
+            `${account.name.trim().toLowerCase()}|${account.account_type}`,
         ),
       ),
       incomingFallback,
@@ -1717,7 +1787,7 @@ async function resolveDuplicatePlaidItem(
       })
       .where("id", "=", syncRunId)
       .execute();
-  await persistSnapshot(transaction, principal);
+  await persistSnapshot(transaction, principal, { externalEligible: true });
   await bumpRevision(transaction, principal);
   return { retireCurrent };
 }
@@ -1761,8 +1831,43 @@ async function reconcileAccounts(
   accounts: AccountBase[],
   requestId: string,
   observedAt: Date,
+  liabilityResponse: Awaited<ReturnType<PlaidGateway["getLiabilities"]>>,
 ): Promise<void> {
   const providerIds: string[] = [];
+  const liabilityByAccount = new Map<string, {
+    type: "credit_card" | "student_loan" | "mortgage" | "other";
+    minimum: number | null; due: string | null; statementBalance: number | null;
+    statementOn: string | null; lastPayment: number | null; lastPaymentOn: string | null;
+    overdue: boolean | null; aprs: Array<{ key: string; percentage: number; balance: number | null; type: string }>;
+  }>();
+  for (const item of liabilityResponse?.liabilities.credit ?? []) if (item.account_id)
+    liabilityByAccount.set(item.account_id, {
+      type: "credit_card", minimum: item.minimum_payment_amount, due: item.next_payment_due_date,
+      statementBalance: item.last_statement_balance, statementOn: item.last_statement_issue_date,
+      lastPayment: item.last_payment_amount, lastPaymentOn: item.last_payment_date, overdue: item.is_overdue,
+      aprs: item.aprs.map((apr, index) => ({ key: `${apr.apr_type}:${index}`, percentage: apr.apr_percentage, balance: apr.balance_subject_to_apr, type: String(apr.apr_type) })),
+    });
+  for (const item of liabilityResponse?.liabilities.student ?? []) if (item.account_id)
+    liabilityByAccount.set(item.account_id, {
+      type: "student_loan", minimum: item.minimum_payment_amount, due: item.next_payment_due_date,
+      statementBalance: item.last_statement_balance ?? null, statementOn: item.last_statement_issue_date,
+      lastPayment: item.last_payment_amount, lastPaymentOn: item.last_payment_date, overdue: item.is_overdue,
+      aprs: [{ key: "student", percentage: item.interest_rate_percentage, balance: null, type: "fixed" }],
+    });
+  for (const item of liabilityResponse?.liabilities.mortgage ?? [])
+    liabilityByAccount.set(item.account_id, {
+      type: "mortgage", minimum: item.next_monthly_payment, due: item.next_payment_due_date,
+      statementBalance: null, statementOn: null, lastPayment: item.last_payment_amount,
+      lastPaymentOn: item.last_payment_date, overdue: item.past_due_amount === null ? null : item.past_due_amount > 0,
+      aprs: item.interest_rate.percentage === null ? [] : [{ key: "mortgage", percentage: item.interest_rate.percentage, balance: null, type: item.interest_rate.type ?? "unknown" }],
+    });
+  for (const item of liabilityResponse?.liabilities.loan ?? [])
+    liabilityByAccount.set(item.account_id, {
+      type: "other", minimum: item.next_payment_amount, due: item.next_payment_due_date,
+      statementBalance: null, statementOn: null, lastPayment: item.last_payment_amount,
+      lastPaymentOn: item.last_payment_date, overdue: null,
+      aprs: item.interest_rate?.percentage === null || item.interest_rate?.percentage === undefined ? [] : [{ key: "loan", percentage: item.interest_rate.percentage, balance: null, type: item.interest_rate.type ?? "unknown" }],
+    });
   for (const account of accounts) {
     const currency = account.balances.iso_currency_code;
     if (currency !== "USD" || account.balances.unofficial_currency_code)
@@ -1803,6 +1908,7 @@ async function reconcileAccounts(
             provider_account_fingerprint: providerFingerprint,
             connection_id: connectionId,
             include_in_plan: false,
+            planning_role: "excluded",
             archived_at: null,
           })
           .returning("id")
@@ -1828,15 +1934,27 @@ async function reconcileAccounts(
           .where("id", "=", existing.id)
           .execute();
     }
-    const basis = account.balances.available !== null ? "available" : "current";
-    const amount = account.balances.available ?? account.balances.current;
+    // For liabilities, `available` is remaining credit—not cash and not the
+    // amount owed. Preserve the signed provider current balance separately.
+    const liability = accountType === "credit" || accountType === "loan";
+    const basis = liability
+      ? "current"
+      : account.balances.available !== null
+        ? "available"
+        : "current";
+    const amount = liability
+      ? account.balances.current
+      : (account.balances.available ?? account.balances.current);
     if (amount !== null)
       await transaction
         .insertInto("balance_observations")
         .values({
           household_id: principal.householdId,
           account_id: accountId,
-          amount_minor: decimalNumberToMinor(amount).toString(),
+          amount_minor: (liability && decimalNumberToMinor(amount) < 0n
+            ? 0n
+            : decimalNumberToMinor(amount)
+          ).toString(),
           currency: "USD",
           provenance: "plaid",
           as_of: observedAt,
@@ -1855,7 +1973,97 @@ async function reconcileAccounts(
             .doNothing(),
         )
         .execute();
+    if (liability) {
+      const providerLiability = liabilityByAccount.get(account.account_id);
+      let debt = await transaction
+        .selectFrom("debts")
+        .selectAll()
+        .where("household_id", "=", principal.householdId)
+        .where("account_id", "=", accountId)
+        .orderBy("created_at", "desc")
+        .executeTakeFirst();
+      // An archived connected debt is a durable opt-out. The account remains
+      // available and the user can explicitly set it up again, but sync must
+      // not recreate a review card on every refresh.
+      if (debt?.status === "archived") continue;
+      if (!debt) {
+        debt = await transaction
+          .insertInto("debts")
+          .values({
+            household_id: principal.householdId,
+            account_id: accountId,
+            linked_commitment_id: null,
+            name,
+            payment_commitment_managed: false,
+            debt_type: providerLiability?.type ?? (accountType === "credit" ? "credit_card" : "other"),
+            status: "needs_review",
+            provenance: "plaid",
+          })
+          .returningAll()
+          .executeTakeFirstOrThrow();
+        await transaction.insertInto("debt_revisions").values({
+          household_id: principal.householdId,
+          debt_id: debt.id,
+          account_id: debt.account_id,
+          linked_commitment_id: null,
+          payment_commitment_managed: false,
+          name: debt.name,
+          debt_type: debt.debt_type,
+          status: debt.status,
+          provenance: debt.provenance,
+          version: debt.version,
+          actor_user_id: null,
+          reason: "Connected liability discovered",
+        }).execute();
+      }
+      if (account.balances.current !== null)
+        await transaction.insertInto("debt_balance_observations").values({
+          household_id: principal.householdId,
+          debt_id: debt.id,
+          current_balance_minor: decimalNumberToMinor(account.balances.current).toString(),
+          currency: "USD",
+          provenance: "plaid",
+          source_record_id: `${requestId}:${account.account_id}`,
+          observed_at: observedAt,
+        }).onConflict((conflict) => conflict.columns(["household_id", "debt_id", "provenance", "source_record_id"]).doNothing()).execute();
+      if (providerLiability) {
+        const liabilityRequestId = liabilityResponse?.requestId ?? requestId;
+        if (providerLiability.minimum !== null || providerLiability.due || providerLiability.statementBalance !== null || providerLiability.lastPayment !== null)
+          await transaction.insertInto("debt_term_observations").values({
+            household_id: principal.householdId, debt_id: debt.id,
+            minimum_payment_minor: providerLiability.minimum === null ? null : decimalNumberToMinor(providerLiability.minimum).toString(),
+            next_due_on: providerLiability.due,
+            statement_balance_minor: providerLiability.statementBalance === null ? null : decimalNumberToMinor(providerLiability.statementBalance).toString(),
+            statement_on: providerLiability.statementOn,
+            last_payment_minor: providerLiability.lastPayment === null ? null : decimalNumberToMinor(providerLiability.lastPayment).toString(),
+            last_payment_on: providerLiability.lastPaymentOn, overdue: providerLiability.overdue,
+            provenance: "plaid", source_record_id: `${liabilityRequestId}:${account.account_id}`,
+            observed_at: observedAt,
+          }).onConflict((conflict) => conflict.columns(["household_id", "debt_id", "provenance", "source_record_id"]).doNothing()).execute();
+        // Applying one component to a multi-rate balance can understate cost.
+        // Until the projection models each balance bucket, only an unambiguous
+        // single APR may drive a payoff estimate.
+        const selected = providerLiability.aprs.length === 1 ? 0 : -1;
+        for (const [index, apr] of providerLiability.aprs.entries())
+          await transaction.insertInto("debt_apr_components").values({
+            household_id: principal.householdId, debt_id: debt.id, component_key: apr.key,
+            apr_basis_points: Math.round(apr.percentage * 100),
+            balance_minor: apr.balance === null ? null : decimalNumberToMinor(apr.balance).toString(),
+            apr_type: mapPlaidAprType(apr.type), selected_for_projection: index === selected,
+            provenance: "plaid", source_record_id: `${liabilityRequestId}:${account.account_id}`,
+            observed_at: observedAt,
+          }).onConflict((conflict) => conflict.columns(["household_id", "debt_id", "provenance", "source_record_id", "component_key"]).doNothing()).execute();
+        await synchronizeProviderMinimumPayment(transaction, principal, debt, providerLiability.minimum, providerLiability.due);
+      }
+    }
   }
+  const disappeared = await transaction.selectFrom("accounts").select("id")
+    .where("household_id", "=", principal.householdId).where("connection_id", "=", connectionId)
+    .where("provenance", "=", "plaid").where("archived_at", "is", null)
+    .$if(providerIds.length > 0, (query) => query.where("provider_account_id", "not in", providerIds))
+    .execute();
+  await detachIncomeSchedulesForAccounts(transaction, principal, disappeared.map((account) => account.id));
+  await pauseDebtTrackingForAccounts(transaction, principal, disappeared.map((account) => account.id));
   let archive = transaction
     .updateTable("accounts")
     .set((eb) => ({
@@ -1870,6 +2078,47 @@ async function reconcileAccounts(
   if (providerIds.length)
     archive = archive.where("provider_account_id", "not in", providerIds);
   await archive.execute();
+}
+
+async function synchronizeProviderMinimumPayment(
+  transaction: DatabaseTransaction<Database>, principal: Principal,
+  debt: { id: string; linked_commitment_id: string | null; payment_commitment_managed: boolean; name: string },
+  minimum: number | null, due: string | null,
+) {
+  if (!debt.payment_commitment_managed || !debt.linked_commitment_id || minimum === null || !due) return;
+  const policy = await transaction.selectFrom("debt_payment_policies").selectAll()
+    .where("household_id", "=", principal.householdId).where("debt_id", "=", debt.id).executeTakeFirst();
+  if (policy?.mode !== "minimum_due") return;
+  const commitment = await transaction.selectFrom("commitments").selectAll()
+    .where("household_id", "=", principal.householdId).where("id", "=", debt.linked_commitment_id)
+    .where("active", "=", true).forUpdate().executeTakeFirst();
+  if (!commitment) return;
+  const amount = decimalNumberToMinor(minimum) + BigInt(policy.extra_amount_minor);
+  if (commitment.amount_minor === amount.toString() && String(commitment.due_date) === due) return;
+  const day = Number(due.slice(8, 10));
+  const date = new Date(`${due}T12:00:00Z`);
+  const next = new Date(date); next.setUTCDate(next.getUTCDate() + 1);
+  const endOfMonth = next.getUTCMonth() !== date.getUTCMonth();
+  const version = commitment.version + 1;
+  const updated = await transaction.updateTable("commitments").set({
+    name: `${debt.name} payment`, amount_minor: amount.toString(), due_date: due,
+    recurrence_anchor_day: day, recurrence_anchor_eom: endOfMonth,
+    version, updated_at: new Date(),
+  }).where("household_id", "=", principal.householdId).where("id", "=", commitment.id)
+    .where("version", "=", commitment.version).returningAll().executeTakeFirstOrThrow();
+  await transaction.insertInto("commitment_revisions").values({
+    household_id: principal.householdId, commitment_id: commitment.id, version,
+    name: updated.name, amount_minor: updated.amount_minor, currency: updated.currency,
+    due_date: updated.due_date, active: true, settled_at: null, actor_user_id: null,
+  }).execute();
+}
+
+function mapPlaidAprType(value: string): "purchase" | "cash_advance" | "balance_transfer" | "fixed" | "variable" | "unknown" {
+  if (value === "purchase_apr") return "purchase";
+  if (value === "cash_apr") return "cash_advance";
+  if (value === "balance_transfer_apr") return "balance_transfer";
+  if (value === "fixed" || value === "variable") return value;
+  return "unknown";
 }
 
 async function applyPlaidTransaction(
@@ -1899,6 +2148,50 @@ async function applyPlaidTransaction(
       .trim()
       .slice(0, 160) || "Unknown transaction";
   const status = item.pending ? "pending" : "posted";
+  const providerPrimary = item.personal_finance_category?.primary ?? null;
+  const providerDetailed = item.personal_finance_category?.detailed ?? null;
+  const aliases = [item.transaction_id, item.pending_transaction_id].filter(
+    (value): value is string => Boolean(value),
+  );
+  let entity = await transaction
+    .selectFrom("transaction_source_aliases")
+    .select("transaction_id")
+    .where("household_id", "=", householdId)
+    .where("account_id", "=", accountId)
+    .where("source_kind", "=", "plaid")
+    .where("source_record_id", "in", aliases)
+    .executeTakeFirst();
+  if (!entity) {
+    const created = await transaction
+      .insertInto("transaction_entities")
+      .values({
+        household_id: householdId,
+        account_id: accountId,
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    entity = { transaction_id: created.id };
+  }
+  await transaction
+    .insertInto("transaction_source_aliases")
+    .values({
+      household_id: householdId,
+      transaction_id: entity.transaction_id,
+      account_id: accountId,
+      source_kind: "plaid",
+      source_record_id: item.transaction_id,
+    })
+    .onConflict((conflict) =>
+      conflict
+        .columns([
+          "household_id",
+          "account_id",
+          "source_kind",
+          "source_record_id",
+        ])
+        .doNothing(),
+    )
+    .execute();
   const rawHash = sha256(
     JSON.stringify({
       accountId: item.account_id,
@@ -1909,6 +2202,8 @@ async function applyPlaidTransaction(
       direction,
       date: item.date,
       status,
+      providerPrimary,
+      providerDetailed,
     }),
   );
   const latest = await latestTransaction(
@@ -1934,8 +2229,164 @@ async function applyPlaidTransaction(
       pending_source_record_id: item.pending_transaction_id ?? null,
       source_updated_at: new Date(),
       raw_hash: rawHash,
+      transaction_id: entity.transaction_id,
+      provider_category_primary: providerPrimary,
+      provider_category_detailed: providerDetailed,
     })
     .execute();
+  await transaction
+    .updateTable("transaction_entities")
+    .set({
+      version: sql`version + 1`,
+      updated_at: new Date(),
+    })
+    .where("household_id", "=", householdId)
+    .where("id", "=", entity.transaction_id)
+    .execute();
+  const assignment = await transaction
+    .selectFrom("transaction_category_assignments")
+    .selectAll()
+    .where("household_id", "=", householdId)
+    .where("transaction_id", "=", entity.transaction_id)
+    .executeTakeFirst();
+  if (!assignment) {
+    const rule = await transaction
+      .selectFrom("merchant_category_rules")
+      .select("category")
+      .where("household_id", "=", householdId)
+      .where("normalized_merchant", "=", normalizeMerchantForRule(merchant))
+      .where("archived_at", "is", null)
+      .executeTakeFirst();
+    const category =
+      rule?.category ??
+      mapPlaidCategory(providerPrimary, providerDetailed, direction);
+    const categorySource = rule
+      ? "merchant_rule"
+      : providerPrimary
+        ? "provider"
+        : "deterministic";
+    const categoryConfidence = rule
+      ? "high"
+      : providerPrimary
+        ? "medium"
+        : category === "income"
+          ? "medium"
+          : "low";
+    await transaction
+      .insertInto("transaction_category_assignments")
+      .values({
+        household_id: householdId,
+        transaction_id: entity.transaction_id,
+        category,
+        source: categorySource,
+        confidence: categoryConfidence,
+        actor_user_id: null,
+      })
+      .execute();
+    await transaction
+      .insertInto("transaction_category_revisions")
+      .values({
+        household_id: householdId,
+        transaction_id: entity.transaction_id,
+        category,
+        source: categorySource,
+        confidence: categoryConfidence,
+        version: 1,
+        actor_user_id: null,
+        reason: "Category assigned during bank synchronization",
+      })
+      .execute();
+  } else if (!["user", "merchant_rule"].includes(assignment.source)) {
+    const category = mapPlaidCategory(
+      providerPrimary,
+      providerDetailed,
+      direction,
+    );
+    const source = providerPrimary ? "provider" : "deterministic";
+    const confidence = providerPrimary
+      ? "medium"
+      : category === "income"
+        ? "medium"
+        : "low";
+    if (
+      assignment.category !== category ||
+      assignment.source !== source ||
+      assignment.confidence !== confidence
+    ) {
+      const version = assignment.version + 1;
+      await transaction
+        .updateTable("transaction_category_assignments")
+        .set({ category, source, confidence, version, updated_at: new Date() })
+        .where("household_id", "=", householdId)
+        .where("transaction_id", "=", entity.transaction_id)
+        .execute();
+      await transaction
+        .insertInto("transaction_category_revisions")
+        .values({
+          household_id: householdId,
+          transaction_id: entity.transaction_id,
+          category,
+          source,
+          confidence,
+          version,
+          actor_user_id: null,
+          reason: "Provider category evidence changed",
+        })
+        .execute();
+    }
+  }
+}
+
+function normalizeMerchantForRule(value: string) {
+  return (
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim()
+      .slice(0, 160) || "unknown"
+  );
+}
+
+function mapPlaidCategory(
+  primary: string | null,
+  detailed: string | null,
+  direction: "debit" | "credit",
+): string {
+  const value = `${primary ?? ""} ${detailed ?? ""}`.toUpperCase();
+  if (value.includes("TRANSFER") || value.includes("CREDIT_CARD_PAYMENT"))
+    return "transfer";
+  if (value.includes("INCOME")) return "income";
+  if (value.includes("RENT") || value.includes("MORTGAGE")) return "housing";
+  if (
+    value.includes("UTILITY") ||
+    value.includes("PHONE") ||
+    value.includes("INTERNET")
+  )
+    return "utilities";
+  if (value.includes("GROCER")) return "groceries";
+  if (value.includes("RESTAURANT") || value.includes("FOOD_AND_DRINK"))
+    return "dining";
+  if (
+    value.includes("TRANSPORT") ||
+    value.includes("GAS") ||
+    value.includes("PARKING")
+  )
+    return "transportation";
+  if (value.includes("MEDICAL") || value.includes("HEALTH")) return "health";
+  if (value.includes("INSURANCE")) return "insurance";
+  if (value.includes("LOAN") || value.includes("DEBT")) return "debt";
+  if (value.includes("SUBSCRIPTION")) return "subscriptions";
+  if (value.includes("FEE")) return "fees";
+  if (value.includes("ENTERTAINMENT")) return "entertainment";
+  if (value.includes("EDUCATION")) return "education";
+  if (value.includes("CHARITY") || value.includes("DONATION")) return "giving";
+  if (value.includes("TAX")) return "taxes";
+  if (value.includes("INVESTMENT") || value.includes("SAVINGS"))
+    return "savings_investments";
+  if (value.includes("ATM") || value.includes("CASH")) return "cash_atm";
+  if (value.includes("SHOP") || value.includes("MERCHANDISE"))
+    return "shopping";
+  return direction === "credit" ? "income" : "uncategorized";
 }
 
 async function applyRemovedTransaction(
@@ -1967,7 +2418,19 @@ async function applyRemovedTransaction(
       pending_source_record_id: latest.pending_source_record_id,
       source_updated_at: new Date(),
       raw_hash: rawHash,
+      transaction_id: latest.transaction_id,
+      provider_category_primary: latest.provider_category_primary,
+      provider_category_detailed: latest.provider_category_detailed,
     })
+    .execute();
+  await transaction
+    .updateTable("transaction_entities")
+    .set({
+      version: sql`version + 1`,
+      updated_at: new Date(),
+    })
+    .where("household_id", "=", householdId)
+    .where("id", "=", latest.transaction_id)
     .execute();
 }
 
@@ -2069,7 +2532,10 @@ function sha256(value: string): string {
 function safeHashEqual(left: string, right: string): boolean {
   const leftBytes = Buffer.from(left, "hex");
   const rightBytes = Buffer.from(right, "hex");
-  return leftBytes.length === rightBytes.length && timingSafeEqual(leftBytes, rightBytes);
+  return (
+    leftBytes.length === rightBytes.length &&
+    timingSafeEqual(leftBytes, rightBytes)
+  );
 }
 function errorCode(error: unknown): string {
   return error instanceof PlaidRequestError

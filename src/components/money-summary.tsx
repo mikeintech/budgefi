@@ -1,17 +1,227 @@
-import { ChevronRight } from 'lucide-react'
-import { Link } from 'react-router-dom'
-import { Button } from '@/components/ui/button'
-import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet'
-import { useAppState } from '@/state/app-state'
-import { cn, money } from '@/lib/utils'
+import { ChevronRight } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Button } from "@/components/ui/button";
+import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { useAppState } from "@/state/app-state";
+import { cn, money } from "@/lib/utils";
 
-export function MoneySummary({variant='full'}:{variant?:'full'|'compact'}) { const {sourceStale,authoritativeProjection,dataMode,backendStatus}=useAppState(); if(backendStatus!=='connected')return <section className="relative overflow-hidden rounded-[22px] border border-rule bg-sheet p-5 shadow-sheet" aria-live="polite"><p className="text-[11px] font-bold uppercase tracking-[.13em] text-carbon/55">{backendStatus==='loading'?'Loading plan':'Plan unavailable'}</p><p className="tabular mt-2 text-[44px] font-bold leading-none tracking-[-.055em]">—</p><p className="mt-3 text-sm leading-5 text-muted">{backendStatus==='loading'?'Your financial values will appear when they are ready.':'Try again to load your current financial values.'}</p></section>; const effectiveStale=dataMode!=='manual'&&sourceStale; const {available,reserved}=authoritativeProjection; const shortfall=available<0; const horizon=formatHorizon(authoritativeProjection.horizonEnd); return <section className="relative overflow-hidden rounded-[22px] border border-rule bg-sheet p-5 shadow-sheet">
-  <div className="flex items-center justify-between gap-3"><p className="text-[11px] font-bold uppercase tracking-[.13em] text-carbon/55">{shortfall?'Projected shortfall':effectiveStale?'Plan preview':`Safe to spend through ${horizon}`}</p>{effectiveStale?<span className="rounded-full bg-recessed px-2.5 py-1 text-[10px] font-bold uppercase tracking-[.1em]">Partial data</span>:dataMode==='manual'?<span className="rounded-full bg-citron/60 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[.1em]">You entered</span>:null}</div>
-  <div className="mt-2"><p className={cn('tabular font-sans font-bold leading-none tracking-[-.055em]',shortfall&&'text-coral',variant==='compact'?'text-[39px]':'text-[44px]')}>{money(Math.abs(available))}</p><p className="mt-2 font-display text-[19px] italic leading-none text-carbon/75">{shortfall?`by ${horizon}`:effectiveStale?`Before unobserved activity · through ${horizon}`:'After bills, savings, and untouched cash'}</p></div>
-  {shortfall&&variant==='full'&&<Button asChild variant="outline" className="mt-4 w-full"><Link to="/settings/calibration">Adjust the plan</Link></Button>}
-  {variant==='full'&&<Sheet><SheetTrigger asChild><button className="mt-5 grid min-h-[66px] w-full grid-cols-[1fr_1fr_auto] items-center gap-3 border-t border-rule pt-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pencil"><span><span className="block text-[10px] font-bold uppercase tracking-[.1em] text-carbon/50">Known cash</span><strong className="tabular mt-0.5 block text-sm">{money(authoritativeProjection.knownCash)}</strong></span><span className="border-l border-rule pl-3"><span className="block text-[10px] font-bold uppercase tracking-[.1em] text-carbon/50">Reserved</span><strong className="tabular mt-0.5 block text-sm">{money(reserved)}</strong></span><ChevronRight className="size-4 text-pencil"/></button></SheetTrigger><SheetContent title="How this is calculated" description="Current server planning window"><Calculation available={available}/></SheetContent></Sheet>}
-</section> }
+export function MoneySummary({
+  variant = "full",
+}: {
+  variant?: "full" | "compact";
+}) {
+  const { sourceStale, authoritativeProjection, dataMode, backendStatus } =
+    useAppState();
+  if (backendStatus !== "connected")
+    return (
+      <section
+        className="relative overflow-hidden rounded-[22px] border border-rule bg-sheet p-5 shadow-sheet"
+        aria-live="polite"
+      >
+        <p className="text-[11px] font-bold uppercase tracking-[.13em] text-carbon/55">
+          {backendStatus === "loading" ? "Loading plan" : "Plan unavailable"}
+        </p>
+        <p className="tabular mt-2 text-[44px] font-bold leading-none tracking-[-.055em]">
+          —
+        </p>
+        <p className="mt-3 text-sm leading-5 text-muted">
+          {backendStatus === "loading"
+            ? "Your financial values will appear when they are ready."
+            : "Try again to load your current financial values."}
+        </p>
+      </section>
+    );
+  const incompleteManual = dataMode === "manual" && sourceStale;
+  const effectiveStale = sourceStale;
+  const { available, reserved } = authoritativeProjection;
+  const shortfall = available < 0;
+  const horizon = formatHorizon(authoritativeProjection.horizonEnd);
+  return (
+    <section className="relative overflow-hidden rounded-[22px] border border-rule bg-sheet p-5 shadow-sheet">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[11px] font-bold uppercase tracking-[.13em] text-carbon/55">
+          {incompleteManual
+            ? "Cash confirmation needed"
+            : shortfall
+              ? "Projected shortfall"
+              : effectiveStale
+                ? "Plan preview"
+                : `Safe to spend through ${horizon}`}
+        </p>
+        {effectiveStale ? (
+          <span className="rounded-full bg-recessed px-2.5 py-1 text-[10px] font-bold uppercase tracking-[.1em]">
+            Partial data
+          </span>
+        ) : dataMode === "manual" ? (
+          <span className="rounded-full bg-citron/60 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[.1em]">
+            You entered
+          </span>
+        ) : null}
+      </div>
+      <div className="mt-2">
+        <p
+          className={cn(
+            "tabular font-sans font-bold leading-none tracking-[-.055em]",
+            shortfall && "text-coral",
+            variant === "compact" ? "text-[39px]" : "text-[44px]",
+          )}
+        >
+          {incompleteManual ? "—" : money(Math.abs(available))}
+        </p>
+        <p className="mt-2 font-display text-[19px] italic leading-none text-carbon/75">
+          {incompleteManual
+            ? "Enter your current spendable cash before relying on this plan"
+            : shortfall
+              ? `by ${horizon}`
+              : effectiveStale
+                ? `Before unobserved activity · through ${horizon}`
+                : "After bills, savings, and untouched cash"}
+        </p>
+      </div>
+      {incompleteManual && variant === "full" && (
+        <Button asChild className="mt-4 w-full">
+          <Link to="/manual">Enter current cash</Link>
+        </Button>
+      )}
+      {!incompleteManual && shortfall && variant === "full" && (
+        <Button asChild variant="outline" className="mt-4 w-full">
+          <Link to="/settings/calibration">Adjust the plan</Link>
+        </Button>
+      )}
+      {variant === "full" && !incompleteManual && (
+        <Sheet>
+          <SheetTrigger asChild>
+            <button className="mt-5 grid min-h-[66px] w-full grid-cols-[1fr_1fr_auto] items-center gap-3 border-t border-rule pt-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pencil">
+              <span>
+                <span className="block text-[10px] font-bold uppercase tracking-[.1em] text-carbon/50">
+                  Known cash
+                </span>
+                <strong className="tabular mt-0.5 block text-sm">
+                  {money(authoritativeProjection.knownCash)}
+                </strong>
+              </span>
+              <span className="border-l border-rule pl-3">
+                <span className="block text-[10px] font-bold uppercase tracking-[.1em] text-carbon/50">
+                  Reserved
+                </span>
+                <strong className="tabular mt-0.5 block text-sm">
+                  {money(reserved)}
+                </strong>
+              </span>
+              <ChevronRight className="size-4 text-pencil" />
+            </button>
+          </SheetTrigger>
+          <SheetContent
+            title="How this is calculated"
+            description="Current server planning window"
+          >
+            <Calculation available={available} />
+          </SheetContent>
+        </Sheet>
+      )}
+    </section>
+  );
+}
 
-export function Calculation({available}:{available:number}) { const {calibration,authoritativeProjection,sourceStale,dataMode,accounts,commitments}=useAppState(); const effectiveStale=dataMode!=='manual'&&sourceStale; const futureBills=authoritativeProjection.commitments; const includedCount=accounts.filter(account=>account.includeInPlan&&["cash","checking","savings"].includes(account.type)).length; const commitmentCount=commitments.length; const horizon=formatHorizon(authoritativeProjection.horizonEnd); const cashNote=dataMode==='manual'?'Current total supplied by you':`${includedCount} included deposit ${includedCount===1?'account':'accounts'} · server-observed`; const rows=[[calibration.cashProvenance==='user_entered'?'You-entered cash':'Observed cash',authoritativeProjection.knownCash,cashNote],['Reviewed commitments',-futureBills,`${commitmentCount} uncleared items in the planning horizon`],['Planned savings',-authoritativeProjection.plannedSavings,'Reserved now for this planning horizon'],['Keep untouched',-authoritativeProjection.safetyBuffer,'Excluded from spendable cash']]; const shortfall=available<0; return <div><div className="divide-y divide-rule rounded-xl border border-rule">{rows.map(([label,value,note])=><div className="flex items-center justify-between gap-4 p-3" key={label as string}><div><div className="font-medium">{label}</div><div className="text-xs text-carbon/55">{note}</div></div><div className="tabular font-semibold">{Number(value)>0?'':'−'}{money(Math.abs(Number(value)))}</div></div>)}<div className="flex items-center justify-between bg-recessed/65 p-3 text-lg font-bold"><span>{shortfall?'Projected shortfall':effectiveStale?'Partial-data preview':`Safe to spend through ${horizon}`}</span><span className={cn('tabular',shortfall&&'text-coral')}>{money(Math.abs(available))}</span></div></div><p className="mt-4 text-sm text-carbon/65">No future income is counted until it is received. {dataMode==='manual'?'Update the current cash total when cleared activity changes it.':'Cleared charges already reflected in observed balances are not subtracted again.'}</p></div> }
+export function Calculation({ available }: { available: number }) {
+  const {
+    calibration,
+    authoritativeProjection,
+    sourceStale,
+    dataMode,
+    accounts,
+    occurrences,
+  } = useAppState();
+  const effectiveStale = sourceStale;
+  const futureBills = authoritativeProjection.commitments;
+  const includedCount = accounts.filter(
+    (account) =>
+      account.includeInPlan &&
+      ["cash", "checking", "savings"].includes(account.type),
+  ).length;
+  const commitmentCount = occurrences.filter(
+    (item) =>
+      item.kind === "commitment" &&
+      item.expectedOn <= authoritativeProjection.horizonEnd &&
+      !["verified", "skipped"].includes(item.state),
+  ).length;
+  const horizon = formatHorizon(authoritativeProjection.horizonEnd);
+  const cashNote =
+    dataMode === "manual" && sourceStale
+      ? "No current manual cash confirmation"
+      : dataMode === "manual"
+        ? "Current total supplied by you"
+        : `${includedCount} included deposit ${includedCount === 1 ? "account" : "accounts"} · server-observed`;
+  const rows = [
+    [
+      calibration.cashProvenance === "user_entered"
+        ? "You-entered cash"
+        : "Observed cash",
+      authoritativeProjection.knownCash,
+      cashNote,
+    ],
+    [
+      "Reviewed commitments",
+      -futureBills,
+      `${commitmentCount} uncleared ${commitmentCount === 1 ? "item" : "items"} through ${horizon}`,
+    ],
+    [
+      "Goal contributions",
+      -authoritativeProjection.plannedSavings,
+      "Planned for active goals; no transfer implied",
+    ],
+    [
+      "Cash cushion",
+      -authoritativeProjection.safetyBuffer,
+      "Spendable cash reserved for surprises",
+    ],
+  ];
+  const shortfall = available < 0;
+  return (
+    <div>
+      <div className="divide-y divide-rule rounded-xl border border-rule">
+        {rows.map(([label, value, note]) => (
+          <div
+            className="flex items-center justify-between gap-4 p-3"
+            key={label as string}
+          >
+            <div>
+              <div className="font-medium">{label}</div>
+              <div className="text-xs text-carbon/55">{note}</div>
+            </div>
+            <div className="tabular font-semibold">
+              {Number(value) > 0 ? "" : "−"}
+              {money(Math.abs(Number(value)))}
+            </div>
+          </div>
+        ))}
+        <div className="flex items-center justify-between bg-recessed/65 p-3 text-lg font-bold">
+          <span>
+            {shortfall
+              ? "Projected shortfall"
+              : effectiveStale
+                ? "Partial-data preview"
+                : `Safe to spend through ${horizon}`}
+          </span>
+          <span className={cn("tabular", shortfall && "text-coral")}>
+            {money(Math.abs(available))}
+          </span>
+        </div>
+      </div>
+      <p className="mt-4 text-sm text-carbon/65">
+        No future income is counted until it is received.{" "}
+        {dataMode === "manual"
+          ? "Update the current cash total when cleared activity changes it."
+          : "Cleared charges already reflected in observed balances are not subtracted again."}
+      </p>
+    </div>
+  );
+}
 
-function formatHorizon(value:string){return new Intl.DateTimeFormat('en-US',{month:'long',day:'numeric',timeZone:'UTC'}).format(new Date(`${value}T12:00:00Z`))}
+function formatHorizon(value: string) {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "long",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(`${value}T12:00:00Z`));
+}

@@ -1,3 +1,5 @@
+import { advanceAnchoredDate, anchorFromDate } from "./schedule.js";
+
 export type PatternDirection = "debit" | "credit";
 export type PatternCadence =
   | "weekly"
@@ -87,7 +89,9 @@ export function detectRecurringPatterns(
   const candidates: RecurringCandidate[] = [];
   for (const [key, group] of groups) {
     if (group.length < 2) continue;
-    const uniqueDates = [...new Set(group.map((item) => item.occurredOn))].sort();
+    const uniqueDates = [
+      ...new Set(group.map((item) => item.occurredOn)),
+    ].sort();
     if (uniqueDates.length < 2) continue;
     const intervals = uniqueDates
       .slice(1)
@@ -95,17 +99,25 @@ export function detectRecurringPatterns(
     const cadence = inferCadence(intervals);
     if (!cadence) continue;
     const target = cadenceTarget(cadence);
-    const intervalError = median(intervals.map((value) => Math.abs(value - target)));
+    const intervalError = median(
+      intervals.map((value) => Math.abs(value - target)),
+    );
     const amounts = group.map((item) => BigInt(item.amountMinor));
     const typical = medianBigInt(amounts);
     const maximum = amounts.reduce((max, value) => (value > max ? value : max));
     const minimum = amounts.reduce((min, value) => (value < min ? value : min));
-    const amountSpread = typical === 0n ? 1 : Number(maximum - minimum) / Number(typical);
+    const amountSpread =
+      typical === 0n ? 1 : Number(maximum - minimum) / Number(typical);
     const amountVariable = amountSpread > 0.12;
-    const cadenceFit = Math.max(0, 1 - intervalError / Math.max(4, target * 0.25));
+    const cadenceFit = Math.max(
+      0,
+      1 - intervalError / Math.max(4, target * 0.25),
+    );
     const evidence = Math.min(1, (uniqueDates.length - 1) / 4);
     const amountFit = Math.max(0, 1 - Math.min(1, amountSpread));
-    const recurrenceScore = roundScore(0.55 + evidence * 0.2 + cadenceFit * 0.16 + amountFit * 0.09);
+    const recurrenceScore = roundScore(
+      0.55 + evidence * 0.2 + cadenceFit * 0.16 + amountFit * 0.09,
+    );
     const lastDate = uniqueDates.at(-1)!;
     candidates.push({
       candidateId: stableCandidateId(key),
@@ -115,7 +127,10 @@ export function detectRecurringPatterns(
       cadence,
       typicalAmountMinor: typical.toString(),
       maximumAmountMinor: maximum.toString(),
-      nextExpectedDate: addDays(lastDate, target),
+      nextExpectedDate:
+        cadence === "semi_monthly"
+          ? addDays(lastDate, target)
+          : advanceAnchoredDate(lastDate, cadence, anchorFromDate(lastDate)),
       amountVariable,
       recurrenceScore,
       observations: group.slice(-6).map((item) => ({
@@ -159,7 +174,11 @@ function markPairedTransfers(
   for (let leftIndex = 0; leftIndex < items.length; leftIndex += 1) {
     const left = items[leftIndex]!;
     if (excluded.has(left.id)) continue;
-    for (let rightIndex = leftIndex + 1; rightIndex < items.length; rightIndex += 1) {
+    for (
+      let rightIndex = leftIndex + 1;
+      rightIndex < items.length;
+      rightIndex += 1
+    ) {
       const right = items[rightIndex]!;
       const distance = daysBetween(left.occurredOn, right.occurredOn);
       if (distance > 3) break;
@@ -240,7 +259,9 @@ function median(values: readonly number[]): number {
 }
 
 function medianBigInt(values: readonly bigint[]): bigint {
-  const sorted = [...values].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+  const sorted = [...values].sort((left, right) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
   const middle = Math.floor(sorted.length / 2);
   return sorted.length % 2
     ? sorted[middle]!
@@ -248,7 +269,10 @@ function medianBigInt(values: readonly bigint[]): bigint {
 }
 
 function daysBetween(left: string, right: string): number {
-  return Math.round((Date.parse(`${right}T12:00:00Z`) - Date.parse(`${left}T12:00:00Z`)) / DAY_MS);
+  return Math.round(
+    (Date.parse(`${right}T12:00:00Z`) - Date.parse(`${left}T12:00:00Z`)) /
+      DAY_MS,
+  );
 }
 
 function addDays(value: string, amount: number): string {

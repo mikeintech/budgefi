@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { OnboardingAnalysisResponse } from "@budgefi/contracts";
+import { resolvePlanningHorizonFromSchedules } from "../../packages/domain/src/index.js";
 import {
   ChevronRight,
   Landmark,
@@ -8,21 +9,28 @@ import {
   ShieldCheck,
   Sparkles,
   Trash2,
-  WalletCards,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SavingsGoalEditor } from "@/components/savings-goal-editor";
+import { DebtEditor } from "@/components/debt-editor";
+import {
+  IncomeScheduleEditor,
+  IncomeScheduleList,
+} from "@/components/income-schedule-editor";
 import { NumberInput } from "@/components/ui/number-input";
 import { Switch } from "@/components/ui/switch";
 import {
   calculatePlanProjection,
   type FinancialAccount,
-  type IncomeFrequency,
   type PlanCalibrationData,
   useAppState,
 } from "@/state/app-state";
 import { withSuggestedCommitmentDates } from "@/lib/commitment-defaults";
+import { mergeCalibrationDraft } from "@/lib/calibration-merge";
 import { nextMonthlyDate } from "@/lib/dates";
 import { cn, money } from "@/lib/utils";
+import { CommonBillsSheet } from "@/components/common-bills-sheet";
+import { hasInvalidDuplicateCommitmentNames } from "@/lib/commitment-validation";
 
 const stageNames = ["Cash scope", "Income timing", "Commitments", "Guardrails"];
 let commitmentSequence = 0;
@@ -63,19 +71,33 @@ export function PlanCalibration({
           includeChase: false,
           includeJoint: false,
           cashProvenance: "user_entered" as const,
-          editedCommitments: [
-            "rentAmount",
-            "electricMax",
-            "streamBoxAmount",
-            "insuranceAmount",
-          ],
+          editedCommitments: state.calibration.editedCommitments,
         }
       : state.calibration;
-    return withSuggestedCommitmentDates(
+    const suggested = withSuggestedCommitmentDates(
       initialData ? mergeCalibrationDraft(base, initialData) : base,
       state.authoritativeProjection.horizonStart,
       state.authoritativeProjection.horizonEnd,
     );
+    return {
+      ...suggested,
+      ...(suggested.rentAmount === 0 &&
+      suggested.starterItemKeys.includes("housing")
+        ? { rentDueDate: "" }
+        : {}),
+      ...(suggested.electricMax === 0 &&
+      suggested.starterItemKeys.includes("utilities")
+        ? { electricDueDate: "" }
+        : {}),
+      ...(suggested.streamBoxAmount === 0 &&
+      suggested.starterItemKeys.includes("subscriptions")
+        ? { streamBoxDueDate: "" }
+        : {}),
+      ...(suggested.insuranceAmount === 0 &&
+      suggested.starterItemKeys.includes("insurance")
+        ? { insuranceDueDate: "" }
+        : {}),
+    };
   });
   const [buffer, setBuffer] = useState(initialBuffer ?? state.planningBuffer);
   const [cashEdited, setCashEdited] = useState(
@@ -90,6 +112,7 @@ export function PlanCalibration({
       state.accounts.filter(
         (account) =>
           ["cash", "checking", "savings"].includes(account.type) &&
+          account.planningRole !== "protected" &&
           account.balance,
       ),
     [state.accounts],
@@ -107,34 +130,80 @@ export function PlanCalibration({
           .map((account) => account.id),
       );
   }, [cashAccounts, manual]);
-  const projection = calculatePlanProjection(
-    draft,
-    buffer,
-    state.authoritativeProjection.horizonEnd,
-  );
+  const draftHorizon = resolvePlanningHorizonFromSchedules({
+    today: state.authoritativeProjection.horizonStart,
+    fallbackDays: draft.fallbackHorizonDays,
+    schedules: state.incomeSchedules.map((item) => ({
+      id: item.id,
+      nextExpectedDate: item.nextExpectedDate,
+      confirmed: item.confirmed,
+      status: item.status,
+    })),
+  });
+  const projection = calculatePlanProjection(draft, buffer, draftHorizon.end, {
+    horizonStart: state.authoritativeProjection.horizonStart,
+    commitments: state.commitments,
+    savingsGoals: state.savingsGoals,
+    occurrences: state.occurrences,
+  });
   const customInvalid = draft.customCommitments.some(
-    (item) => !item.name.trim() || item.amount <= 0,
+    (item) => !item.name.trim() || (item.amount <= 0 && !item.starterItemKey),
   );
   const fixedCommitments = [
-    { name: draft.rentName, amount: draft.rentAmount, date: draft.rentDueDate },
-    { name: draft.electricName, amount: draft.electricMax, date: draft.electricDueDate },
-    { name: draft.streamBoxName, amount: draft.streamBoxAmount, date: draft.streamBoxDueDate },
-    { name: draft.insuranceName, amount: draft.insuranceAmount, date: draft.insuranceDueDate },
-  ];
-  const activeNames = [
-    ...fixedCommitments.filter((item) => item.amount > 0).map((item) => item.name.trim().toLocaleLowerCase()),
-    ...draft.customCommitments.filter((item) => item.amount > 0).map((item) => item.name.trim().toLocaleLowerCase()),
+    {
+      id: draft.rentId,
+      name: draft.rentName,
+      amount: draft.rentAmount,
+      date: draft.rentDueDate,
+    },
+    {
+      id: draft.electricId,
+      name: draft.electricName,
+      amount: draft.electricMax,
+      date: draft.electricDueDate,
+    },
+    {
+      id: draft.streamBoxId,
+      name: draft.streamBoxName,
+      amount: draft.streamBoxAmount,
+      date: draft.streamBoxDueDate,
+    },
+    {
+      id: draft.insuranceId,
+      name: draft.insuranceName,
+      amount: draft.insuranceAmount,
+      date: draft.insuranceDueDate,
+    },
   ];
   const commitmentInvalid =
     customInvalid ||
     fixedCommitments.some((item) => item.amount > 0 && !item.name.trim()) ||
-    new Set(activeNames).size !== activeNames.length;
+    hasInvalidDuplicateCommitmentNames(
+      [...fixedCommitments, ...draft.customCommitments],
+      state.commitments,
+    );
   const hasDatedCommitments =
     fixedCommitments.some((item) => item.amount > 0 && Boolean(item.date)) ||
-    draft.customCommitments.some((item) => item.amount > 0 && Boolean(item.dueDate));
+    draft.customCommitments.some(
+      (item) => item.amount > 0 && Boolean(item.dueDate),
+    );
   useEffect(() => {
     onDraftChange?.(draft, buffer);
   }, [draft, buffer, onDraftChange]);
+  useEffect(() => {
+    const contribution = state.savingsGoals
+      .filter((goal) => goal.status === "active")
+      .reduce(
+        (sum, goal) =>
+          sum + Number(BigInt(goal.contributionAmount.minor)) / 100,
+        0,
+      );
+    setDraft((value) =>
+      value.savingsContribution === contribution
+        ? value
+        : { ...value, savingsContribution: contribution },
+    );
+  }, [state.savingsGoals]);
   useEffect(() => {
     onStageChange?.(stage);
   }, [stage, onStageChange]);
@@ -236,7 +305,12 @@ export function PlanCalibration({
         />
       )}
       {stage === 1 && (
-        <IncomeTiming manual={manual} draft={draft} setDraft={setDraft} />
+        <IncomeTiming
+          draft={draft}
+          setDraft={setDraft}
+          horizonEnd={draftHorizon.end}
+          analysis={analysis}
+        />
       )}
       {stage === 2 && (
         <Commitments
@@ -246,16 +320,18 @@ export function PlanCalibration({
           requireDateReview={embedded}
           datesReviewed={commitmentDatesReviewed}
           setDatesReviewed={setCommitmentDatesReviewed}
+          horizonEnd={draftHorizon.end}
+          horizonStart={draftHorizon.start}
         />
       )}
       {stage === 3 && (
         <Guardrails
           draft={draft}
-          setDraft={setDraft}
           buffer={buffer}
           setBuffer={setBuffer}
           projection={projection}
           stale={!manual && state.sourceStale}
+          horizonEnd={draftHorizon.end}
         />
       )}
       <div className="mt-auto grid grid-cols-[auto_1fr] gap-2 pt-6">
@@ -309,8 +385,8 @@ export function PlanCalibration({
         )}
       {stage === 2 && commitmentInvalid && (
         <p className="mt-2 text-center text-xs text-coral">
-          Every commitment needs a unique name and an amount—or set it to $0
-          or remove it. Due dates may be added later.
+          Add an amount and name to each commitment. New or renamed commitments
+          also need distinct names. Due dates may be added later.
         </p>
       )}
       {stage === 2 &&
@@ -333,7 +409,7 @@ function AnalysisNotice({
 }) {
   const added =
     analysis.suggestions.commitments.length +
-    Number(Boolean(analysis.suggestions.income)) +
+    analysis.suggestions.incomes.length +
     Number(Boolean(analysis.suggestions.savings));
   const keptOut =
     analysis.suggestions.filtered.length +
@@ -535,121 +611,157 @@ function CashScope({
 }
 
 function IncomeTiming({
-  manual,
   draft,
   setDraft,
+  horizonEnd: horizonEndValue,
+  analysis,
 }: {
-  manual: boolean;
   draft: PlanCalibrationData;
   setDraft: React.Dispatch<React.SetStateAction<PlanCalibrationData>>;
+  horizonEnd: string;
+  analysis: OnboardingAnalysisResponse | null;
 }) {
-  const { authoritativeProjection } = useAppState();
-  const inside =
-    Boolean(draft.nextIncomeDate) &&
-    draft.nextIncomeDate >= authoritativeProjection.horizonStart &&
-    draft.nextIncomeDate <= authoritativeProjection.horizonEnd;
-  const horizonEnd = formatCalibrationDate(authoritativeProjection.horizonEnd);
+  const state = useAppState();
+  const [addingSuggestion, setAddingSuggestion] = useState<string | null>(null);
+  const horizonEnd = formatCalibrationDate(horizonEndValue);
   return (
     <section>
-      <p className="eyebrow">Optional planning context</p>
+      <p className="eyebrow">Planning horizon</p>
       <h1 className="text-[29px] font-bold leading-tight tracking-[-.045em]">
         When is money coming in?
       </h1>
       <p className="mt-2 text-sm leading-5 text-muted">
-        Add a schedule only if it helps you reason about timing. This note does
-        not increase available cash; future deposits remain excluded until
-        received.
+        Your plan runs through the next paycheck you confirm. Future deposits
+        never increase available cash until they are actually received.
       </p>
-      <div className="mt-5 rounded-[20px] border border-rule bg-white p-4">
-        <div className="flex items-center justify-between">
-          <span className="flex items-center gap-2">
-            <WalletCards className="size-5 text-pencil" />
-            <strong className="text-sm">Primary paycheck</strong>
-          </span>
-          <Provenance label="Planning note" />
+      <div className="mt-5">
+        {analysis?.state === "ready" &&
+          analysis.suggestions.incomes.length > 0 && (
+            <div className="mb-3 rounded-[20px] border border-cobalt/15 bg-cobalt/[.035] p-4">
+              <p className="text-xs font-bold uppercase tracking-[.1em] text-cobalt">
+                Found in your activity
+              </p>
+              <div className="mt-2 divide-y divide-rule">
+                {analysis.suggestions.incomes.map((item) => {
+                  const alreadyAdded = state.incomeSchedules.some(
+                    (schedule) =>
+                      schedule.status !== "archived" &&
+                      schedule.name.toLowerCase() === item.name.toLowerCase() &&
+                      schedule.nextExpectedDate === item.nextExpectedDate,
+                  );
+                  const needsAnchors = item.cadence === "semi_monthly";
+                  const supported = [
+                    "weekly",
+                    "biweekly",
+                    "semi_monthly",
+                    "monthly",
+                    "quarterly",
+                    "annual",
+                  ].includes(item.cadence);
+                  return (
+                    <div
+                      key={item.candidateId}
+                      className="flex min-h-16 items-center gap-3 py-2"
+                    >
+                      <span className="min-w-0 flex-1">
+                        <strong className="block truncate text-sm">
+                          {item.name}
+                        </strong>
+                        <span className="block text-xs text-muted">
+                          {money(Number(item.amount.minor) / 100)} ·{" "}
+                          {item.cadence.replace("_", " ")} · expected{" "}
+                          {formatCalibrationDate(item.nextExpectedDate)}
+                        </span>
+                      </span>
+                      {alreadyAdded ? (
+                        <span className="text-xs font-bold text-leaf">
+                          Added
+                        </span>
+                      ) : needsAnchors ? (
+                        <span className="max-w-24 text-right text-[11px] leading-4 text-muted">
+                          Add below and choose both pay days
+                        </span>
+                      ) : supported ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={addingSuggestion !== null}
+                          onClick={async () => {
+                            setAddingSuggestion(item.candidateId);
+                            await state.createIncomeSchedule({
+                              destinationAccountId: null,
+                              name: item.name,
+                              expectedAmount:
+                                Number(item.amount.minor) > 0
+                                  ? item.amount
+                                  : null,
+                              frequency: item.cadence as
+                                | "weekly"
+                                | "biweekly"
+                                | "monthly"
+                                | "quarterly"
+                                | "annual",
+                              nextExpectedDate: item.nextExpectedDate,
+                              confirmed: true,
+                              anchorDay: Number(
+                                item.nextExpectedDate.slice(8, 10),
+                              ),
+                              anchorEndOfMonth: false,
+                              secondAnchorDay: null,
+                              secondAnchorEndOfMonth: false,
+                            });
+                            setAddingSuggestion(null);
+                          }}
+                        >
+                          {addingSuggestion === item.candidateId
+                            ? "Adding…"
+                            : "Add"}
+                        </Button>
+                      ) : (
+                        <span className="text-[11px] text-muted">
+                          Not auto-added
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        <IncomeScheduleList compact />
+        <div className="mt-3">
+          <IncomeScheduleEditor />
         </div>
-        <div className="mt-4 grid grid-cols-2 gap-3">
-          <Field label="Typical net amount">
-            <MoneyInput
-              value={draft.incomeAmount}
-              onChange={(incomeAmount) =>
-                setDraft((value) => ({ ...value, incomeAmount }))
-              }
-            />
-          </Field>
-          <Field label="Next expected date">
-            <input
-              type="date"
-              value={draft.nextIncomeDate}
-              onChange={(event) =>
-                setDraft((value) => ({
-                  ...value,
-                  nextIncomeDate: event.target.value,
-                }))
-              }
-              className="h-12 w-full rounded-xl border border-rule bg-white px-3 text-base outline-none focus:ring-2 focus:ring-pencil"
-            />
-          </Field>
-        </div>
+      </div>
+      <div className="mt-4 rounded-[20px] border border-rule bg-white p-4">
         <label
-          className="mt-4 block text-xs font-semibold"
-          htmlFor="income-frequency"
+          className="block text-xs font-semibold"
+          htmlFor="fallback-horizon"
         >
-          Pay frequency
+          If payday is unknown
         </label>
         <select
-          id="income-frequency"
-          value={draft.incomeFrequency}
+          id="fallback-horizon"
+          value={draft.fallbackHorizonDays}
           onChange={(event) =>
             setDraft((value) => ({
               ...value,
-              incomeFrequency: event.target.value as IncomeFrequency,
-              incomeConfirmed:
-                event.target.value === "irregular"
-                  ? false
-                  : value.incomeConfirmed,
+              fallbackHorizonDays: Number(event.target.value),
             }))
           }
           className="mt-2 h-12 w-full rounded-xl border border-rule bg-white px-3 text-base outline-none focus:ring-2 focus:ring-pencil"
         >
-          <option value="weekly">Weekly</option>
-          <option value="biweekly">Every two weeks</option>
-          <option value="semi_monthly">Twice a month</option>
-          <option value="monthly">Monthly</option>
-          <option value="irregular">Irregular</option>
+          <option value={7}>Plan 7 days ahead</option>
+          <option value={14}>Plan 14 days ahead</option>
+          <option value={21}>Plan 21 days ahead</option>
+          <option value={30}>Plan 30 days ahead</option>
         </select>
-        <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl bg-recessed p-3">
-          <span>
-            <strong className="block text-sm">Schedule looks right</strong>
-            <span className="text-xs text-muted">
-              Planning note only; it does not affect cash
-            </span>
-          </span>
-          <Switch
-            checked={draft.incomeConfirmed}
-            onCheckedChange={(incomeConfirmed) =>
-              setDraft((value) => ({ ...value, incomeConfirmed }))
-            }
-            label="Confirm income schedule"
-          />
-        </div>
       </div>
-      <div
-        className={cn(
-          "mt-4 rounded-2xl p-4 text-sm",
-          inside ? "border border-pencil/15 bg-pencil/[.035]" : "bg-recessed",
-        )}
-      >
-        <strong>
-          {inside
-            ? `${money(draft.incomeAmount)} noted by ${horizonEnd}`
-            : draft.nextIncomeDate
-              ? `Next pay is outside the plan through ${horizonEnd}`
-              : "No income schedule added"}
-        </strong>
+      <div className="mt-4 rounded-2xl border border-pencil/15 bg-pencil/[.035] p-4 text-sm">
+        <strong>Plan runs through {horizonEnd}</strong>
         <p className="mt-1 text-xs leading-5 text-muted">
-          Not counted until received. Reimbursements and transfers are also
-          excluded.
+          The earliest reliable income date controls this window. Expected
+          amounts, reimbursements, and transfers are not counted as cash.
         </p>
       </div>
     </section>
@@ -663,6 +775,8 @@ function Commitments({
   requireDateReview,
   datesReviewed,
   setDatesReviewed,
+  horizonEnd,
+  horizonStart,
 }: {
   manual: boolean;
   draft: PlanCalibrationData;
@@ -670,16 +784,58 @@ function Commitments({
   requireDateReview: boolean;
   datesReviewed: boolean;
   setDatesReviewed: (value: boolean) => void;
+  horizonEnd: string;
+  horizonStart: string;
 }) {
-  const { authoritativeProjection, commitments } = useAppState();
+  const { commitments } = useAppState();
   const savedNames = new Set(
     commitments.map((item) => item.name.toLocaleLowerCase()),
   );
-  const items: [FixedNameKey, FixedAmountKey, FixedDateKey, string, string][] = [
-    ["rentName", "rentAmount", "rentDueDate", "Rent", "rent"],
-    ["electricName", "electricMax", "electricDueDate", "Electric", "electric"],
-    ["streamBoxName", "streamBoxAmount", "streamBoxDueDate", "Subscriptions", "streambox"],
-    ["insuranceName", "insuranceAmount", "insuranceDueDate", "Insurance", "insurance"],
+  const items: [
+    FixedIdKey,
+    FixedNameKey,
+    FixedAmountKey,
+    FixedDateKey,
+    FixedRecurrenceKey,
+    string,
+    string,
+  ][] = [
+    [
+      "rentId",
+      "rentName",
+      "rentAmount",
+      "rentDueDate",
+      "rentRecurrence",
+      "Rent",
+      "rent",
+    ],
+    [
+      "electricId",
+      "electricName",
+      "electricMax",
+      "electricDueDate",
+      "electricRecurrence",
+      "Electric",
+      "electric",
+    ],
+    [
+      "streamBoxId",
+      "streamBoxName",
+      "streamBoxAmount",
+      "streamBoxDueDate",
+      "streamBoxRecurrence",
+      "Subscriptions",
+      "streambox",
+    ],
+    [
+      "insuranceId",
+      "insuranceName",
+      "insuranceAmount",
+      "insuranceDueDate",
+      "insuranceRecurrence",
+      "Insurance",
+      "insurance",
+    ],
   ];
   const updateName = (key: FixedNameKey, name: string) => {
     setDraft((value) => ({ ...value, [key]: name }));
@@ -694,10 +850,7 @@ function Commitments({
         [key]: amount,
         [dateKey]:
           amount > 0 && !value[dateKey]
-            ? nextMonthlyDate(
-                authoritativeProjection.horizonStart,
-                fixedPreferredDays[dateKey],
-              )
+            ? nextMonthlyDate(horizonStart, fixedPreferredDays[dateKey])
             : value[dateKey],
         editedCommitments: value.editedCommitments.includes(key)
           ? value.editedCommitments
@@ -709,19 +862,43 @@ function Commitments({
     setDatesReviewed(false);
     setDraft((value) => ({ ...value, [key]: date }));
   };
+  const updateRecurrence = (
+    key: FixedRecurrenceKey,
+    recurrence: PlanCalibrationData[FixedRecurrenceKey],
+  ) => {
+    setDatesReviewed(false);
+    setDraft((value) => ({ ...value, [key]: recurrence }));
+  };
   const add = () => {
     setDatesReviewed(false);
     setDraft((value) => ({
       ...value,
       customCommitments: [
         ...value.customCommitments,
-        { id: createCommitmentId(), name: "", amount: 0, dueDate: "" },
+        {
+          id: createCommitmentId(),
+          name: "",
+          amount: 0,
+          dueDate: "",
+          recurrence: "monthly",
+        },
       ],
     }));
   };
   const updateCustom = (
     id: string,
-    patch: Partial<{ name: string; amount: number; dueDate: string }>,
+    patch: Partial<{
+      name: string;
+      amount: number;
+      dueDate: string;
+      recurrence:
+        | "one_time"
+        | "weekly"
+        | "biweekly"
+        | "monthly"
+        | "quarterly"
+        | "annual";
+    }>,
   ) => {
     setDatesReviewed(false);
     setDraft((value) => ({
@@ -733,94 +910,145 @@ function Commitments({
   };
   const removeCustom = (id: string) => {
     setDatesReviewed(false);
-    setDraft((value) => ({
-      ...value,
-      customCommitments: value.customCommitments.filter(
+    setDraft((value) => {
+      const removedKey = value.customCommitments.find(
+        (item) => item.id === id,
+      )?.starterItemKey;
+      const customCommitments = value.customCommitments.filter(
         (item) => item.id !== id,
-      ),
-    }));
+      );
+      return {
+        ...value,
+        customCommitments,
+        starterItemKeys:
+          removedKey &&
+          !customCommitments.some((item) => item.starterItemKey === removedKey)
+            ? value.starterItemKeys.filter((key) => key !== removedKey)
+            : value.starterItemKeys,
+      };
+    });
   };
-  const total =
-    draft.rentAmount +
-    draft.electricMax +
-    draft.streamBoxAmount +
-    draft.insuranceAmount +
-    draft.customCommitments.reduce((sum, item) => sum + item.amount, 0);
+  const activeRuleCount =
+    [
+      draft.rentAmount,
+      draft.electricMax,
+      draft.streamBoxAmount,
+      draft.insuranceAmount,
+    ].filter((amount) => amount > 0).length +
+    draft.customCommitments.filter((item) => item.amount > 0).length;
+  const visibleItems = items.filter(
+    ([idKey, , amountKey]) =>
+      Boolean(draft[idKey]) ||
+      draft[amountKey] > 0 ||
+      draft.editedCommitments.includes(amountKey),
+  );
   return (
     <section>
-      <p className="eyebrow">
-        Through {formatCalibrationDate(authoritativeProjection.horizonEnd)}
-      </p>
+      <p className="eyebrow">Through {formatCalibrationDate(horizonEnd)}</p>
       <h1 className="text-[29px] font-bold leading-tight tracking-[-.045em]">
         What must be paid?
       </h1>
       <p className="mt-2 text-sm leading-5 text-muted">
-        Start with these common commitments, then add anything missing. Saved
-        amounts stay intact; new amounts remain $0 until you enter them.
+        Review what is already here or add only the bills that apply. Empty
+        starter rows do not change Available to use.
       </p>
       <div className="mt-5 space-y-2">
-        {items.map(([nameKey, amountKey, dateKey, suggestedName, canonicalName]) => {
-          const name = draft[nameKey];
-          const source =
-            manual || draft.editedCommitments.includes(amountKey)
-              ? "You entered"
-              : savedNames.has(canonicalName) ||
-                  (amountKey === "streamBoxAmount" &&
-                    savedNames.has("subscriptions"))
-                ? "Saved commitment"
-                : "Suggested setup";
-          return (
-            <div
-              key={amountKey}
-              className="rounded-[18px] border border-rule bg-white p-3"
-            >
-              <div className="flex items-center justify-between gap-3">
-                <input
-                  aria-label={`${suggestedName} commitment name`}
-                  value={name}
-                  maxLength={120}
-                  onChange={(event) => updateName(nameKey, event.target.value)}
-                  className="h-10 min-w-0 flex-1 rounded-xl border border-rule bg-white px-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-pencil"
-                />
-                <span className="text-[10px] font-semibold text-muted">
-                  {source}
-                </span>
-              </div>
-              <div className="mt-2 grid grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)] gap-2">
-                <div className="flex h-11 items-center rounded-xl border border-rule px-2 focus-within:ring-2 focus-within:ring-pencil">
-                  <span className="text-sm text-muted">$</span>
-                  <NumberInput
-                    aria-label={`${name || suggestedName} amount`}
-                    min={0}
-                    step="0.01"
-                    value={draft[amountKey]}
-                    onValueChange={(value) => update(amountKey, value)}
-                    className="h-full min-w-0 flex-1 bg-transparent px-1 text-right text-base font-bold outline-none"
+        {visibleItems.map(
+          ([
+            idKey,
+            nameKey,
+            amountKey,
+            dateKey,
+            recurrenceKey,
+            suggestedName,
+            canonicalName,
+          ]) => {
+            const name = draft[nameKey];
+            const source =
+              manual || draft.editedCommitments.includes(amountKey)
+                ? "You entered"
+                : draft[idKey] ||
+                    savedNames.has(canonicalName) ||
+                    (amountKey === "streamBoxAmount" &&
+                      savedNames.has("subscriptions"))
+                  ? "Saved commitment"
+                  : "Suggested setup";
+            return (
+              <div
+                key={amountKey}
+                className="rounded-[18px] border border-rule bg-white p-3"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <input
+                    aria-label={`${suggestedName} commitment name`}
+                    value={name}
+                    maxLength={120}
+                    onChange={(event) =>
+                      updateName(nameKey, event.target.value)
+                    }
+                    className="h-10 min-w-0 flex-1 rounded-xl border border-rule bg-white px-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-pencil"
+                  />
+                  <span className="text-[10px] font-semibold text-muted">
+                    {source}
+                  </span>
+                </div>
+                <select
+                  aria-label={`${name || suggestedName} recurrence`}
+                  value={draft[recurrenceKey]}
+                  onChange={(event) =>
+                    updateRecurrence(
+                      recurrenceKey,
+                      event.target
+                        .value as PlanCalibrationData[FixedRecurrenceKey],
+                    )
+                  }
+                  className="mt-2 h-11 w-full rounded-xl border border-rule bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-pencil"
+                >
+                  <option value="one_time">One time</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="biweekly">Every two weeks</option>
+                  <option value="monthly">Monthly</option>
+                  <option value="quarterly">Every three months</option>
+                  <option value="annual">Yearly</option>
+                </select>
+                <div className="mt-2 grid grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)] gap-2">
+                  <div className="flex h-11 items-center rounded-xl border border-rule px-2 focus-within:ring-2 focus-within:ring-pencil">
+                    <span className="text-sm text-muted">$</span>
+                    <NumberInput
+                      aria-label={`${name || suggestedName} amount`}
+                      min={0}
+                      step="0.01"
+                      value={draft[amountKey]}
+                      onValueChange={(value) => update(amountKey, value)}
+                      className="h-full min-w-0 flex-1 bg-transparent px-1 text-right text-base font-bold outline-none"
+                    />
+                  </div>
+                  <input
+                    aria-label={`${name || suggestedName} due date`}
+                    type="date"
+                    value={draft[dateKey]}
+                    onChange={(event) =>
+                      updateDate(dateKey, event.target.value)
+                    }
+                    className="h-11 min-w-0 rounded-xl border border-rule px-2 text-sm outline-none focus:ring-2 focus:ring-pencil"
                   />
                 </div>
-                <input
-                  aria-label={`${name || suggestedName} due date`}
-                  type="date"
-                  value={draft[dateKey]}
-                  onChange={(event) => updateDate(dateKey, event.target.value)}
-                  className="h-11 min-w-0 rounded-xl border border-rule px-2 text-sm outline-none focus:ring-2 focus:ring-pencil"
-                />
+                {draft[amountKey] > 0 && !draft[dateKey] && (
+                  <p className="mt-2 text-[11px] font-semibold text-muted">
+                    Tracked, but not reserved until you add a due date.
+                  </p>
+                )}
               </div>
-              {draft[amountKey] > 0 && !draft[dateKey] && (
-                <p className="mt-2 text-[11px] font-semibold text-muted">
-                  Tracked, but not reserved until you add a due date.
-                </p>
-              )}
-            </div>
-          );
-        })}
+            );
+          },
+        )}
       </div>
       <p className="mt-3 rounded-2xl bg-recessed p-3 text-[11px] leading-4 text-muted">
         Dates are suggested starting points, not detected facts. Change them to
         match your bills, or clear a date to track something without reserving
         it yet. Rows left at $0 are not saved as commitments.
       </p>
-      {requireDateReview && total > 0 && (
+      {requireDateReview && activeRuleCount > 0 && (
         <label className="mt-3 flex min-h-14 cursor-pointer items-center justify-between gap-3 rounded-2xl border border-pencil/15 bg-pencil/[.035] px-4">
           <span>
             <strong className="block text-sm">
@@ -884,28 +1112,83 @@ function Commitments({
               className="h-11 min-w-0 rounded-xl border border-rule px-2 text-sm outline-none focus:ring-2 focus:ring-pencil"
             />
           </div>
+          <select
+            aria-label={`${item.name || "Custom commitment"} recurrence`}
+            value={item.recurrence}
+            onChange={(event) =>
+              updateCustom(item.id, {
+                recurrence: event.target.value as typeof item.recurrence,
+              })
+            }
+            className="mt-2 h-11 w-full rounded-xl border border-rule bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-pencil"
+          >
+            <option value="one_time">One time</option>
+            <option value="weekly">Weekly</option>
+            <option value="biweekly">Every two weeks</option>
+            <option value="monthly">Monthly</option>
+            <option value="quarterly">Every three months</option>
+            <option value="annual">Yearly</option>
+          </select>
           {item.amount > 0 && !item.dueDate && (
             <p className="mt-2 text-[11px] font-semibold text-muted">
               Tracked, but not reserved until you add a due date.
             </p>
           )}
+          {item.starterItemKey && item.amount === 0 && (
+            <p className="mt-2 text-[11px] font-semibold text-cobalt">
+              Empty starter · add an amount and date when you know them.
+            </p>
+          )}
         </div>
       ))}
-      <Button
-        type="button"
-        variant="outline"
-        onClick={add}
-        className="mt-3 w-full"
-      >
-        <Plus className="size-4" />
-        Add missing commitment
-      </Button>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={add}
+          className="w-full px-2"
+        >
+          <Plus className="size-4" /> Add one
+        </Button>
+        <CommonBillsSheet
+          existingKeys={draft.starterItemKeys}
+          existingNames={[
+            ...draft.customCommitments.map((item) => item.name),
+            ...(draft.rentId || draft.rentAmount > 0 ? ["Housing"] : []),
+            ...(draft.electricId || draft.electricMax > 0 ? ["Utilities"] : []),
+            ...(draft.streamBoxId || draft.streamBoxAmount > 0
+              ? ["Subscriptions"]
+              : []),
+            ...(draft.insuranceId || draft.insuranceAmount > 0
+              ? ["Insurance"]
+              : []),
+          ]}
+          onAdd={(items) => {
+            setDraft((value) => ({
+              ...value,
+              customCommitments: [...value.customCommitments, ...items],
+              starterItemKeys: [
+                ...new Set([
+                  ...value.starterItemKeys,
+                  ...items.flatMap((item) =>
+                    item.starterItemKey ? [item.starterItemKey] : [],
+                  ),
+                ]),
+              ],
+            }));
+            setDatesReviewed(false);
+            return true;
+          }}
+        />
+      </div>
       <div className="mt-4 flex items-center justify-between rounded-2xl bg-recessed p-4">
         <span>
           <span className="block text-[10px] font-bold uppercase tracking-[.1em] text-muted">
-            Reserved for commitments
+            Commitment rules ready
           </span>
-          <strong className="tabular mt-1 block text-xl">{money(total)}</strong>
+          <strong className="tabular mt-1 block text-xl">
+            {activeRuleCount}
+          </strong>
         </span>
         <Provenance label="Reviewed" />
       </div>
@@ -921,6 +1204,7 @@ type FixedAmountKey =
   | "electricMax"
   | "streamBoxAmount"
   | "insuranceAmount";
+type FixedIdKey = "rentId" | "electricId" | "streamBoxId" | "insuranceId";
 type FixedNameKey =
   | "rentName"
   | "electricName"
@@ -931,6 +1215,11 @@ type FixedDateKey =
   | "electricDueDate"
   | "streamBoxDueDate"
   | "insuranceDueDate";
+type FixedRecurrenceKey =
+  | "rentRecurrence"
+  | "electricRecurrence"
+  | "streamBoxRecurrence"
+  | "insuranceRecurrence";
 const fixedDateKeyForAmount: Record<FixedAmountKey, FixedDateKey> = {
   rentAmount: "rentDueDate",
   electricMax: "electricDueDate",
@@ -943,39 +1232,23 @@ const fixedPreferredDays: Record<FixedDateKey, number> = {
   streamBoxDueDate: 15,
   insuranceDueDate: 20,
 };
-function mergeCalibrationDraft(
-  canonical: PlanCalibrationData,
-  stored: PlanCalibrationData,
-): PlanCalibrationData {
-  const storedIds = new Set(
-    (stored.customCommitments ?? []).map((item) => item.id),
-  );
-  return {
-    ...canonical,
-    ...stored,
-    customCommitments: [
-      ...(stored.customCommitments ?? []),
-      ...canonical.customCommitments.filter((item) => !storedIds.has(item.id)),
-    ],
-  };
-}
 function Guardrails({
   draft,
-  setDraft,
   buffer,
   setBuffer,
   projection,
   stale,
+  horizonEnd,
 }: {
   draft: PlanCalibrationData;
-  setDraft: React.Dispatch<React.SetStateAction<PlanCalibrationData>>;
   buffer: number;
   setBuffer: (value: number) => void;
   projection: ReturnType<typeof calculatePlanProjection>;
   stale: boolean;
+  horizonEnd: string;
 }) {
   const shortfall = projection.available < 0;
-  const { accounts, authoritativeProjection } = useAppState();
+  const { accounts, savingsGoals, debts } = useAppState();
   const incomplete = accounts
     .filter(
       (account) =>
@@ -992,22 +1265,69 @@ function Guardrails({
         What should stay protected?
       </h1>
       <p className="mt-2 text-sm leading-5 text-muted">
-        Planned savings is set aside for this plan. Keep untouched is cash you
-        do not want Budgefi to count as spendable.
+        Goal contributions are planned, not moved. Cash cushion is the extra
+        spendable cash you want Budgefi to leave alone.
       </p>
-      <div className="mt-5 grid grid-cols-1 gap-3 min-[370px]:grid-cols-2">
-        <Field label="Planned savings">
-          <MoneyInput
-            value={draft.savingsContribution}
-            onChange={(savingsContribution) =>
-              setDraft((value) => ({ ...value, savingsContribution }))
-            }
-          />
-        </Field>
-        <Field label="Keep untouched">
+      <div className="mt-5 rounded-[20px] border border-rule bg-white p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-bold">
+              Savings goals{" "}
+              <span className="font-normal text-muted">· optional</span>
+            </h2>
+            <p className="mt-1 text-xs leading-5 text-muted">
+              {savingsGoals.some((goal) => goal.status !== "archived")
+                ? `${savingsGoals.filter((goal) => goal.status !== "archived").length} ${savingsGoals.filter((goal) => goal.status !== "archived").length === 1 ? "goal" : "goals"} · ${money(projection.plannedSavings)} reserved through ${formatCalibrationDate(horizonEnd)}`
+                : "Create one only if you want to track progress toward a destination."}
+            </p>
+          </div>
+          <SavingsGoalEditor compact simple />
+        </div>
+      </div>
+      <div className="mt-3 rounded-[20px] border border-rule bg-white p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-bold">
+              Debts <span className="font-normal text-muted">· optional</span>
+            </h2>
+            <p className="mt-1 text-xs leading-5 text-muted">
+              {debts.length
+                ? `${debts.length} found · review only what you want to track`
+                : "Add a card or loan only if payment visibility would help."}
+            </p>
+          </div>
+          <DebtEditor compact />
+        </div>
+        {debts
+          .filter((debt) => debt.status === "needs_review")
+          .map((debt) => (
+            <div
+              key={debt.id}
+              className="mt-3 flex items-center justify-between gap-3 rounded-2xl bg-amber-50 p-3"
+            >
+              <span className="min-w-0">
+                <strong className="block truncate text-sm">{debt.name}</strong>
+                <span className="block text-xs text-muted">
+                  Connected debt · details are optional
+                </span>
+              </span>
+              <DebtEditor debt={debt} />
+            </div>
+          ))}
+      </div>
+      <details className="mt-3 rounded-[20px] border border-rule bg-white p-4">
+        <summary className="min-h-11 cursor-pointer text-sm font-bold">
+          Cash cushion{" "}
+          <span className="font-normal text-muted">· optional</span>
+        </summary>
+        <p className="mb-3 text-xs leading-5 text-muted">
+          Extra spendable cash reserved for surprises. This is not a savings
+          transfer or a goal.
+        </p>
+        <Field label="Cushion amount">
           <MoneyInput value={buffer} onChange={setBuffer} />
         </Field>
-      </div>
+      </details>
       <div className="mt-5 overflow-hidden rounded-[22px] bg-ink p-4 text-white">
         <div className="flex items-center justify-between">
           <p className="text-[10px] font-bold uppercase tracking-[.1em] text-citron">
@@ -1015,7 +1335,7 @@ function Guardrails({
               ? "Projected shortfall"
               : stale
                 ? "Partial-data preview"
-                : `Safe to spend through ${formatCalibrationDate(authoritativeProjection.horizonEnd)}`}
+                : `Safe to spend through ${formatCalibrationDate(horizonEnd)}`}
           </p>
           {stale && (
             <span className="rounded-full bg-white/10 px-2 py-1 text-[9px] font-bold uppercase tracking-[.08em]">
@@ -1040,13 +1360,14 @@ function Guardrails({
             value={-projection.futureBills}
           />
           <Equation
-            label="Planned savings"
-            value={-draft.savingsContribution}
+            label="Goal contributions"
+            value={-projection.plannedSavings}
           />
-          <Equation label="Keep untouched" value={-buffer} />
+          <Equation label="Cash cushion" value={-buffer} />
         </div>
         <p className="mt-4 text-[11px] leading-5 text-white/55">
-          No future income counted.
+          Future income is excluded until received. Plan runs through{" "}
+          {formatCalibrationDate(horizonEnd)}.
         </p>
       </div>
       {stale && (

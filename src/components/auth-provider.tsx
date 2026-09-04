@@ -9,5 +9,5 @@ export function OptionalAuthProvider({ children }: { children: React.ReactNode }
 }
 
 function AuthLoading() {
-  return <div className="grid min-h-dvh place-items-center bg-paper text-sm font-semibold text-muted">Opening Budgefi…</div>;
+  return <div className="app-boot grid min-h-dvh place-items-center bg-paper text-sm font-semibold text-muted">Opening Budgefi…</div>;
 }

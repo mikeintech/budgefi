@@ -16,6 +16,8 @@ describe("public discovery and brand surface", () => {
     expect(html).toContain("Finding the charge is the easy part.");
     expect(html).toContain('href="/privacy.html"');
     expect(html).toContain('href="/terms.html"');
+    expect(html).toContain("html,body,#root{min-height:100%;background:#f3eedf");
+    expect(html).toContain(".app-boot{min-height:100vh;min-height:100dvh;background:#f3eedf");
   });
 
   it("keeps only intentional public pages in discovery files", () => {

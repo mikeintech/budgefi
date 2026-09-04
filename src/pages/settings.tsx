@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { UserProfile, useUser } from "@clerk/react";
 import { Link, Navigate, useParams } from "react-router-dom";
 import {
@@ -25,7 +25,13 @@ import {
 } from "@/state/app-state";
 import { money } from "@/lib/utils";
 import { api, requestId } from "@/lib/api";
-import { enablePushOnThisDevice } from "@/lib/native-notifications";
+import {
+  disablePushOnThisDevice,
+  enablePushOnThisDevice,
+  isNotificationPermissionDenied,
+  isPushEnabledOnThisDevice,
+  openNotificationSettings,
+} from "@/lib/native-notifications";
 import { isNativeApp } from "@/lib/platform";
 import { nativeLockStorageKey } from "@/components/native-runtime";
 import {
@@ -39,12 +45,13 @@ import { signOutCurrentUser } from "@/lib/auth";
 import { Directory, Encoding, Filesystem } from "@capacitor/filesystem";
 import { Share } from "@capacitor/share";
 import { Switch } from "@/components/ui/switch";
+import { resolvePlanningHorizonFromSchedules } from "../../packages/domain/src/index.js";
+import {
+  IncomeScheduleEditor,
+  IncomeScheduleList,
+} from "@/components/income-schedule-editor";
 import { clearNativeCacheFiles } from "@/lib/native-cache";
 import { clerkConfigured } from "@/lib/auth";
-import {
-  disablePushOnThisDevice,
-  isPushEnabledOnThisDevice,
-} from "@/lib/native-notifications";
 
 const sections = [
   {
@@ -261,14 +268,41 @@ function HouseholdSettings() {
 function PlanningSettings() {
   const state = useAppState();
   const [draft, setDraft] = useState(state.planningBuffer);
+  const [fallbackDays, setFallbackDays] = useState(
+    state.calibration.fallbackHorizonDays,
+  );
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  useEffect(() => {
+    if (dirty) return;
+    setDraft(state.planningBuffer);
+    setFallbackDays(state.calibration.fallbackHorizonDays);
+  }, [state.revision, dirty]);
+  const draftHorizon = resolvePlanningHorizonFromSchedules({
+    today: state.authoritativeProjection.horizonStart,
+    fallbackDays,
+    schedules: state.incomeSchedules.map((item) => ({
+      id: item.id,
+      nextExpectedDate: item.nextExpectedDate,
+      confirmed: item.confirmed,
+      status: item.status,
+    })),
+  });
   const available = calculatePlanProjection(
     state.calibration,
     draft,
-    state.authoritativeProjection.horizonEnd,
+    draftHorizon.end,
+    {
+      horizonStart: state.authoritativeProjection.horizonStart,
+      commitments: state.commitments,
+      savingsGoals: state.savingsGoals,
+      occurrences: state.occurrences,
+    },
   ).available;
-  const changed = draft !== state.planningBuffer;
+  const changed =
+    draft !== state.planningBuffer ||
+    fallbackDays !== state.calibration.fallbackHorizonDays;
   const shortfall = available < 0;
   return (
     <>
@@ -282,7 +316,7 @@ function PlanningSettings() {
         className="mt-6 block text-sm font-semibold"
         htmlFor="planning-buffer"
       >
-        Keep untouched
+        Cash cushion
       </label>
       <p className="mt-1 text-xs text-muted">
         Cash Budgefi excludes from safe-to-spend for surprises.
@@ -296,6 +330,7 @@ function PlanningSettings() {
           inputMode="decimal"
           value={draft}
           onValueChange={(value) => {
+            setDirty(true);
             setDraft(value);
             setSaved(false);
           }}
@@ -320,18 +355,58 @@ function PlanningSettings() {
             month: "long",
             day: "numeric",
             timeZone: "UTC",
-          }).format(
-            new Date(`${state.authoritativeProjection.horizonEnd}T12:00:00Z`),
-          )}
+          }).format(new Date(`${draftHorizon.end}T12:00:00Z`))}
         </p>
       </div>
+      <section className="mt-6 rounded-[20px] border border-rule bg-white p-4">
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-bold">Income timing</h2>
+            <p className="mt-1 text-xs leading-5 text-muted">
+              Each reliable payday is tracked separately. The earliest sets the
+              plan end date but never adds cash before the deposit arrives.
+            </p>
+          </div>
+          <IncomeScheduleEditor compact />
+        </div>
+        <div className="mt-4">
+          <IncomeScheduleList compact />
+        </div>
+        <label
+          className="mt-3 block text-xs font-semibold"
+          htmlFor="planning-fallback"
+        >
+          When payday is unknown
+        </label>
+        <select
+          id="planning-fallback"
+          value={fallbackDays}
+          onChange={(event) => {
+            setDirty(true);
+            setSaved(false);
+            setFallbackDays(Number(event.target.value));
+          }}
+          className="mt-2 h-12 w-full rounded-xl border border-rule px-3 text-base outline-none focus:ring-2 focus:ring-pencil"
+        >
+          <option value={7}>Plan 7 days ahead</option>
+          <option value={14}>Plan 14 days ahead</option>
+          <option value={21}>Plan 21 days ahead</option>
+          <option value={30}>Plan 30 days ahead</option>
+        </select>
+      </section>
       <Button
         disabled={!changed || saving}
         onClick={async () => {
           setSaving(true);
-          const okay = await state.savePlanningBuffer(draft);
+          const okay = await state.savePlanningPolicy(
+            {
+              fallbackHorizonDays: fallbackDays,
+            },
+            draft,
+          );
           setSaving(false);
           setSaved(okay);
+          if (okay) setDirty(false);
         }}
         className="mt-5 w-full"
       >
@@ -351,8 +426,8 @@ function PlanningSettings() {
           />
           <StaticRow title="Future income" detail="Exclude until observed" />
           <StaticRow
-            title="Planned savings"
-            detail="Reserve now for this horizon"
+            title="Goal contributions"
+            detail="Planned only; progress requires verified movement"
           />
         </div>
       </section>
@@ -362,10 +437,15 @@ function PlanningSettings() {
 
 function NotificationSettings() {
   const [prefs, setPrefs] = useState<NotificationPreferences | null>(null);
+  const [availableThreshold, setAvailableThreshold] = useState(250);
   const [devicePushEnabled, setDevicePushEnabled] = useState(false);
+  const [pushPermissionDenied, setPushPermissionDenied] = useState(false);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
-  useEffect(() => {
+  const savingRef = useRef(false);
+  const loadPreferences = () => {
+    setPrefs(null);
+    setMessage("");
     void api
       .notificationPreferences()
       .then(setPrefs)
@@ -376,10 +456,28 @@ function NotificationSettings() {
             : "Notification settings could not load",
         ),
       );
-    if (isNativeApp) {
+  };
+  useEffect(() => {
+    loadPreferences();
+    if (!isNativeApp) return;
+    const refreshDeviceState = () => {
       void isPushEnabledOnThisDevice().then(setDevicePushEnabled);
-    }
+      void isNotificationPermissionDenied().then(setPushPermissionDenied);
+    };
+    refreshDeviceState();
+    window.addEventListener("focus", refreshDeviceState);
+    document.addEventListener("visibilitychange", refreshDeviceState);
+    return () => {
+      window.removeEventListener("focus", refreshDeviceState);
+      document.removeEventListener("visibilitychange", refreshDeviceState);
+    };
   }, []);
+  useEffect(() => {
+    if (prefs)
+      setAvailableThreshold(
+        Number(BigInt(prefs.availableCashThreshold.minor)) / 100,
+      );
+  }, [prefs?.availableCashThreshold.minor]);
   if (!prefs)
     return (
       <>
@@ -387,27 +485,44 @@ function NotificationSettings() {
         <h1 className="text-[29px] font-bold tracking-[-0.045em]">
           Notifications
         </h1>
-        <p className="mt-5 rounded-2xl bg-recessed p-4 text-sm text-muted">
-          {message || "Loading your notification choices…"}
-        </p>
+        <div className="mt-5 rounded-2xl bg-recessed p-4 text-sm text-muted">
+          <p>{message || "Loading your notification choices…"}</p>
+          {message && (
+            <Button
+              type="button"
+              variant="outline"
+              className="mt-3 min-h-11 bg-white"
+              onClick={loadPreferences}
+            >
+              Try again
+            </Button>
+          )}
+        </div>
       </>
     );
+  const persist = async (next: NotificationPreferences) => {
+    const { emailVerified: _, version, ...update } = next;
+    const saved = await api.updateNotificationPreferences({
+      ...update,
+      expectedVersion: version,
+      requestId: requestId(),
+    });
+    setPrefs(saved);
+    setMessage("Notification choices saved.");
+  };
   const save = async (next: NotificationPreferences) => {
+    if (savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
     setMessage("");
     try {
-      const { emailVerified: _, ...update } = next;
-      const saved = await api.updateNotificationPreferences({
-        ...update,
-        requestId: requestId(),
-      });
-      setPrefs(saved);
-      setMessage("Notification choices saved.");
+      await persist(next);
     } catch (error) {
       setMessage(
         error instanceof Error ? error.message : "Changes could not be saved",
       );
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   };
@@ -416,6 +531,8 @@ function NotificationSettings() {
       NotificationPreferences,
       | "connectionHealth"
       | "commitmentReminders"
+      | "incomeReminders"
+      | "savingsReminders"
       | "exceptionActivity"
       | "weeklyDigest"
       | "lockScreenDetail"
@@ -427,6 +544,8 @@ function NotificationSettings() {
           {
             connectionHealth: "Connection health",
             commitmentReminders: "Upcoming commitments",
+            incomeReminders: "Missed expected income",
+            savingsReminders: "Planned savings",
             exceptionActivity: "Financial exceptions",
             weeklyDigest: "Weekly summary",
             lockScreenDetail: "Show details on lock screen",
@@ -434,6 +553,7 @@ function NotificationSettings() {
         )[key]
       }
       checked={prefs[key]}
+      disabled={saving}
       onChange={(checked) => void save({ ...prefs, [key]: checked })}
     />
   );
@@ -458,39 +578,56 @@ function NotificationSettings() {
           checked={devicePushEnabled && prefs.pushEnabled}
           disabled={!isNativeApp || saving}
           onChange={async (checked) => {
-            if (checked) {
-              setMessage("Requesting permission…");
-              try {
+            if (savingRef.current) return;
+            savingRef.current = true;
+            setSaving(true);
+            setMessage(checked ? "Requesting permission…" : "");
+            try {
+              if (checked) {
                 const result = await enablePushOnThisDevice();
                 if (!result.okay) {
                   setMessage(result.message);
+                  setPushPermissionDenied(
+                    await isNotificationPermissionDenied(),
+                  );
                   return;
                 }
                 setDevicePushEnabled(true);
-              } catch (error) {
-                setMessage(
-                  error instanceof Error
-                    ? error.message
-                    : "Push setup did not finish",
-                );
-                return;
-              }
-            } else {
-              try {
+                setPushPermissionDenied(false);
+              } else {
                 await disablePushOnThisDevice();
                 setDevicePushEnabled(false);
-              } catch (error) {
-                setMessage(
-                  error instanceof Error
-                    ? error.message
-                    : "Push could not be turned off on this phone",
-                );
-                return;
               }
+              await persist({ ...prefs, pushEnabled: checked });
+            } catch (error) {
+              setMessage(
+                error instanceof Error
+                  ? error.message
+                  : checked
+                    ? "Push setup did not finish"
+                    : "Push could not be turned off on this phone",
+              );
+            } finally {
+              savingRef.current = false;
+              setSaving(false);
             }
-            await save({ ...prefs, pushEnabled: checked });
           }}
         />
+        {isNativeApp && pushPermissionDenied && (
+          <div className="border-b border-rule px-4 py-3">
+            <p className="text-xs leading-5 text-muted">
+              Notifications are blocked for Budgefi on this iPhone.
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              className="mt-2 min-h-11 bg-white"
+              onClick={() => void openNotificationSettings()}
+            >
+              Open iPhone Settings
+            </Button>
+          </div>
+        )}
         <ToggleRow
           title="Email"
           detail={
@@ -503,12 +640,181 @@ function NotificationSettings() {
           onChange={(checked) => void save({ ...prefs, emailEnabled: checked })}
         />
       </section>
+      <section className="mt-5 rounded-[20px] border border-rule bg-white p-4">
+        <div className="flex min-h-11 items-center justify-between gap-4">
+          <span className="min-w-0">
+            <strong className="block text-sm">Low available cash</strong>
+            <span className="mt-0.5 block text-xs leading-5 text-muted">
+              Alert when Budgefi’s Available to use falls below the amount you choose.
+            </span>
+          </span>
+          <Switch
+            checked={prefs.availableCashAlerts}
+            disabled={saving}
+            onCheckedChange={(checked) =>
+              void save({ ...prefs, availableCashAlerts: checked })
+            }
+            label="Low available cash alert"
+          />
+        </div>
+        {prefs.availableCashAlerts && (
+          <label className="mt-4 block border-t border-rule pt-4 text-xs font-semibold">
+            Alert below
+            <div className="mt-2 flex h-12 items-center rounded-xl border border-rule bg-white px-3 focus-within:ring-2 focus-within:ring-pencil">
+              <span className="text-muted">$</span>
+              <NumberInput
+                value={availableThreshold}
+                min={0}
+                max={1_000_000}
+                step="1"
+                disabled={saving}
+                onValueChange={setAvailableThreshold}
+                onBlur={() => {
+                  const minor = String(Math.round(Math.max(0, availableThreshold) * 100));
+                  if (minor !== prefs.availableCashThreshold.minor)
+                    void save({
+                      ...prefs,
+                      availableCashThreshold: { minor, currency: "USD" },
+                    });
+                }}
+                className="h-full min-w-0 flex-1 bg-transparent px-2 text-lg font-bold outline-none"
+              />
+            </div>
+            <span className="mt-2 block font-normal leading-5 text-muted">
+              Uses the same plan calculation shown on Today. Stale or incomplete data will never trigger this alert.
+            </span>
+          </label>
+        )}
+        {prefs.availableCashAlerts &&
+          !prefs.emailEnabled &&
+          !(prefs.pushEnabled && devicePushEnabled) && (
+            <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
+              This will appear in Budgefi, but no email or phone delivery method is on.
+            </p>
+          )}
+      </section>
       <section className="mt-5 overflow-hidden rounded-[20px] border border-rule bg-white">
         {toggle("connectionHealth")}
         {toggle("commitmentReminders")}
+        {toggle("incomeReminders")}
+        {toggle("savingsReminders")}
         {toggle("exceptionActivity")}
         {toggle("weeklyDigest")}
         {toggle("lockScreenDetail")}
+      </section>
+      <section className="mt-5 rounded-[20px] border border-rule bg-white p-4">
+        <h2 className="text-sm font-bold">When should Budgefi remind you?</h2>
+        <p className="mt-1 text-xs leading-5 text-muted">
+          Choose up to two reminders. Yearly and three-month items use their own
+          earlier timing.
+        </p>
+        <LeadDayPicker
+          label="Most commitments"
+          days={prefs.commitmentReminderDays}
+          disabled={saving}
+          onChange={(days) =>
+            void save({ ...prefs, commitmentReminderDays: days })
+          }
+        />
+        <LeadDayPicker
+          label="Yearly or every three months"
+          days={prefs.longTermReminderDays}
+          disabled={saving}
+          onChange={(days) =>
+            void save({ ...prefs, longTermReminderDays: days })
+          }
+        />
+        <LeadDayPicker
+          label="Savings plans"
+          days={prefs.savingsReminderDays}
+          disabled={saving}
+          onChange={(days) =>
+            void save({ ...prefs, savingsReminderDays: days })
+          }
+        />
+      </section>
+      <section className="mt-5 rounded-[20px] border border-rule bg-white p-4">
+        <h2 className="text-sm font-bold">Delivery time</h2>
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          <label className="text-xs font-semibold">
+            Reminder time
+            <input
+              type="time"
+              value={timeValue(prefs.reminderHour * 60 + prefs.reminderMinute)}
+              disabled={saving}
+              onChange={(event) => {
+                const minutes = parseTime(event.target.value);
+                void save({
+                  ...prefs,
+                  reminderHour: Math.floor(minutes / 60),
+                  reminderMinute: minutes % 60,
+                });
+              }}
+              className="mt-2 h-12 w-full rounded-xl border border-rule bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-pencil"
+            />
+          </label>
+          <label className="text-xs font-semibold">
+            Time zone
+            <select
+              value={prefs.timezone}
+              disabled={saving}
+              onChange={(event) =>
+                void save({ ...prefs, timezone: event.target.value })
+              }
+              className="mt-2 h-12 w-full rounded-xl border border-rule bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-pencil"
+            >
+              {[
+                ...new Set([
+                  prefs.timezone,
+                  Intl.DateTimeFormat().resolvedOptions().timeZone,
+                ]),
+              ].map((zone) => (
+                <option key={zone} value={zone}>
+                  {zone === Intl.DateTimeFormat().resolvedOptions().timeZone
+                    ? "This device"
+                    : zone}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <p className="mt-4 text-xs font-semibold">Quiet time</p>
+        <div className="mt-2 grid grid-cols-2 gap-3">
+          <label className="text-[11px] text-muted">
+            Starts
+            <input
+              type="time"
+              value={timeValue(prefs.quietStartMinute)}
+              disabled={saving}
+              onChange={(event) =>
+                void save({
+                  ...prefs,
+                  quietStartMinute: parseTime(event.target.value),
+                })
+              }
+              className="mt-1 h-11 w-full rounded-xl border border-rule bg-white px-3 text-sm text-carbon"
+            />
+          </label>
+          <label className="text-[11px] text-muted">
+            Ends
+            <input
+              type="time"
+              value={timeValue(prefs.quietEndMinute)}
+              disabled={saving}
+              onChange={(event) =>
+                void save({
+                  ...prefs,
+                  quietEndMinute: parseTime(event.target.value),
+                })
+              }
+              className="mt-1 h-11 w-full rounded-xl border border-rule bg-white px-3 text-sm text-carbon"
+            />
+          </label>
+        </div>
+        <p className="mt-2 text-xs leading-5 text-muted">
+          A reminder that falls in quiet time waits until quiet time ends. Old
+          reminders expire instead of arriving as a backlog.
+        </p>
       </section>
       {message && (
         <p
@@ -518,12 +824,65 @@ function NotificationSettings() {
           {message}
         </p>
       )}
-      <p className="mt-4 text-xs leading-5 text-muted">
-        Reminder time: {String(prefs.reminderHour).padStart(2, "0")}:00 ·{" "}
-        {prefs.timezone}
-      </p>
     </>
   );
+}
+
+function LeadDayPicker({
+  label,
+  days,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  days: number[];
+  disabled: boolean;
+  onChange: (days: number[]) => void;
+}) {
+  const choices = [0, 1, 3, 7, 14, 30];
+  return (
+    <div className="mt-4">
+      <p className="text-xs font-semibold">{label}</p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {choices.map((day) => {
+          const selected = days.includes(day);
+          return (
+            <button
+              key={day}
+              type="button"
+              disabled={disabled}
+              aria-pressed={selected}
+              onClick={() => {
+                if (selected && days.length === 1) return;
+                const next = (
+                  selected
+                    ? days.filter((item) => item !== day)
+                    : days.length < 2
+                      ? [...days, day]
+                      : [days[0]!, day]
+                ).sort((left, right) => right - left);
+                onChange(next);
+              }}
+              className={`min-h-10 rounded-full border px-3 text-xs font-semibold ${selected ? "border-cobalt bg-cobalt text-white" : "border-rule bg-white text-carbon"}`}
+            >
+              {day === 0
+                ? "Due day"
+                : `${day} day${day === 1 ? "" : "s"} before`}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function timeValue(minutes: number) {
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+}
+
+function parseTime(value: string) {
+  const [hour, minute] = value.split(":").map(Number);
+  return Math.max(0, Math.min(1439, (hour || 0) * 60 + (minute || 0)));
 }
 
 function SecuritySettings() {
