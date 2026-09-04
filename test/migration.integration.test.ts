@@ -52,6 +52,7 @@ describe("fresh PostgreSQL migration and seed", () => {
       "033_flexible_schedules_and_reminders.sql",
       "034_commitment_slots_and_explicit_skips.sql",
       "035_common_bill_starters_and_available_cash_alerts.sql",
+      "036_restart_onboarding_for_active_memberships.sql",
     ]);
     expect(
       applied.rows.every((row) => /^[a-f0-9]{64}$/.test(row.checksum)),
@@ -996,8 +997,8 @@ describe("fresh PostgreSQL migration and seed", () => {
       order by household_id`);
     expect(memberships.rows).toEqual([
       { household_id: "22000000-0000-4000-8000-000000000101", complete: false },
-      { household_id: "22000000-0000-4000-8000-000000000102", complete: true },
-      { household_id: "22000000-0000-4000-8000-000000000103", complete: true },
+      { household_id: "22000000-0000-4000-8000-000000000102", complete: false },
+      { household_id: "22000000-0000-4000-8000-000000000103", complete: false },
     ]);
 
     expect(
@@ -1041,7 +1042,7 @@ describe("fresh PostgreSQL migration and seed", () => {
           "select min(data_revision)::int minimum,max(data_revision)::int maximum from households where id::text like '22000000-%'",
         )
       ).rows[0],
-    ).toEqual({ minimum: 2, maximum: 2 });
+    ).toEqual({ minimum: 3, maximum: 3 });
   });
 
   it("bootstraps separate least-privilege production login roles", async () => {
