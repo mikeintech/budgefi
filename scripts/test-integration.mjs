@@ -163,7 +163,9 @@ async function seedLegacySampleMigrationFixtures(databaseUrl) {
         ('22000000-0000-4000-8000-000000000103','22000000-0000-4000-8000-000000000003','owner',now());
       INSERT INTO plans(id,household_id,planned_savings_minor,safety_buffer_minor,currency,calculation_policy_version) VALUES
         ('22000000-0000-4000-8000-000000000301','22000000-0000-4000-8000-000000000101',0,0,'USD','available-v1'),
-        ('22000000-0000-4000-8000-000000000302','22000000-0000-4000-8000-000000000102',0,0,'USD','available-v1'),
+        -- Nonzero legacy savings exercises the 029 creation and 033 immutable
+        -- revision enrichment path before the test suite reaches current data.
+        ('22000000-0000-4000-8000-000000000302','22000000-0000-4000-8000-000000000102',5000,0,'USD','available-v1'),
         ('22000000-0000-4000-8000-000000000303','22000000-0000-4000-8000-000000000103',0,0,'USD','available-v1');
       INSERT INTO connections(id,household_id,provider,provider_item_id,status) VALUES
         ('22000000-0000-4000-8000-000000000501','22000000-0000-4000-8000-000000000101','sample','legacy-sample-only','healthy'),

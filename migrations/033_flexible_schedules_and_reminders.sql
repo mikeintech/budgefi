@@ -52,11 +52,18 @@ END $$;
 CREATE TRIGGER savings_goal_revision_schedule
   BEFORE INSERT ON savings_goal_revisions
   FOR EACH ROW EXECUTE FUNCTION normalize_savings_goal_revision_schedule();
+-- Historical revisions are immutable at runtime. The migration must enrich
+-- their newly introduced snapshot columns while that guard is transactionally
+-- disabled, then restore it before any application traffic can observe them.
+ALTER TABLE savings_goal_revisions
+  DISABLE TRIGGER savings_goal_revisions_append_only;
 UPDATE savings_goal_revisions revision SET
   schedule_anchor_day=goal.schedule_anchor_day,
   schedule_anchor_eom=goal.schedule_anchor_eom
 FROM savings_goals goal
 WHERE goal.household_id=revision.household_id AND goal.id=revision.savings_goal_id;
+ALTER TABLE savings_goal_revisions
+  ENABLE TRIGGER savings_goal_revisions_append_only;
 
 ALTER TABLE savings_goals FORCE ROW LEVEL SECURITY;
 ALTER TABLE savings_goal_revisions FORCE ROW LEVEL SECURITY;

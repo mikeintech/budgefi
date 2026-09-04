@@ -128,7 +128,7 @@ ALTER TABLE plan_occurrences ADD CONSTRAINT plan_occurrences_owner_check CHECK (
   (kind='commitment' AND commitment_id IS NOT NULL AND savings_goal_id IS NULL) OR
   (kind='savings' AND commitment_id IS NULL AND savings_goal_id IS NOT NULL) OR
   (kind='income' AND commitment_id IS NULL AND savings_goal_id IS NULL)
-);
+) NOT VALID;
 
 -- Preserve the old reserve as an unverified General savings goal. It remains
 -- an intention only: no opening movement and no protected account are invented.
