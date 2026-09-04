@@ -1,6 +1,10 @@
 -- Stable setup identities survive user-facing renames. Explicit skips remain
 -- distinguishable from synchronization supersession in bootstrap projections.
 
+-- Backfill existing commitments while the production owner can see forced-RLS
+-- rows; restore tenant enforcement before creating runtime behavior.
+ALTER TABLE commitments NO FORCE ROW LEVEL SECURITY;
+
 ALTER TABLE commitments
   ADD COLUMN setup_slot text,
   ADD CONSTRAINT commitments_setup_slot_valid CHECK (
@@ -33,6 +37,8 @@ UPDATE commitments commitment
 SET setup_slot = candidate.setup_slot
 FROM candidates candidate
 WHERE commitment.id = candidate.id AND candidate.slot_rank = 1;
+
+ALTER TABLE commitments FORCE ROW LEVEL SECURITY;
 
 CREATE UNIQUE INDEX commitments_active_setup_slot_unique
   ON commitments(household_id, setup_slot)

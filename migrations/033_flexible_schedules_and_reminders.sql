@@ -1,5 +1,10 @@
 -- Calendar-anchored quarterly/annual schedules and auditable reminder inputs.
 
+-- Production migrations are owned by a non-BYPASSRLS role. Make legacy rows
+-- visible only for this transaction's audited backfills, then restore FORCE.
+ALTER TABLE savings_goals NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE savings_goal_revisions NO FORCE ROW LEVEL SECURITY;
+
 ALTER TABLE commitments
   ADD CONSTRAINT commitments_recurrence_check CHECK (
     recurrence IS NULL OR recurrence IN ('weekly','biweekly','monthly','quarterly','annual')
@@ -53,6 +58,9 @@ UPDATE savings_goal_revisions revision SET
 FROM savings_goals goal
 WHERE goal.household_id=revision.household_id AND goal.id=revision.savings_goal_id;
 
+ALTER TABLE savings_goals FORCE ROW LEVEL SECURITY;
+ALTER TABLE savings_goal_revisions FORCE ROW LEVEL SECURITY;
+
 ALTER TABLE income_schedules DROP CONSTRAINT income_schedules_frequency_check;
 ALTER TABLE income_schedules ADD CONSTRAINT income_schedules_frequency_check CHECK(
   frequency IN ('weekly','biweekly','semi_monthly','monthly','quarterly','annual','irregular')
@@ -70,6 +78,11 @@ ALTER TABLE plan_occurrences
   ADD COLUMN source_revision_kind text,
   ADD COLUMN source_revision_id uuid,
   ADD COLUMN source_revision_version integer;
+
+ALTER TABLE plan_occurrences NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE commitment_revisions NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE savings_goal_revisions NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE income_schedule_revisions NO FORCE ROW LEVEL SECURITY;
 
 WITH chosen AS (
   SELECT occurrence.id,(SELECT revision.id FROM commitment_revisions revision
@@ -101,6 +114,11 @@ WITH chosen AS (
   FROM plan_occurrences occurrence WHERE occurrence.kind='income'
 ) UPDATE plan_occurrences occurrence SET source_revision_kind='income',source_revision_id=chosen.revision_id,source_revision_version=chosen.revision_version
 FROM chosen WHERE occurrence.id=chosen.id;
+
+ALTER TABLE plan_occurrences FORCE ROW LEVEL SECURITY;
+ALTER TABLE commitment_revisions FORCE ROW LEVEL SECURITY;
+ALTER TABLE savings_goal_revisions FORCE ROW LEVEL SECURITY;
+ALTER TABLE income_schedule_revisions FORCE ROW LEVEL SECURITY;
 
 ALTER TABLE plan_occurrences
   ALTER COLUMN source_revision_kind SET NOT NULL,
@@ -350,6 +368,11 @@ CREATE TRIGGER notification_preference_version
 CREATE TRIGGER notification_preference_revision
   AFTER INSERT OR UPDATE ON notification_preferences
   FOR EACH ROW EXECUTE FUNCTION append_notification_preference_revision();
+
+ALTER TABLE notification_preferences NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE notification_preference_revisions NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE notification_events NO FORCE ROW LEVEL SECURITY;
+
 INSERT INTO notification_preference_revisions(
   household_id,user_id,version,email_enabled,push_enabled,connection_health,commitment_reminders,
   income_reminders,savings_reminders,exception_activity,weekly_digest,lock_screen_detail,
@@ -382,6 +405,11 @@ ALTER TABLE notification_events
 UPDATE notification_events event SET preference_revision=preference.version,timezone_snapshot=preference.timezone
 FROM notification_preferences preference
 WHERE preference.household_id=event.household_id AND preference.user_id=event.user_id;
+
+ALTER TABLE notification_preference_revisions FORCE ROW LEVEL SECURITY;
+-- notification_preferences and notification_events deliberately remain
+-- NO FORCE under migration 019's narrow SECURITY DEFINER worker boundary.
+
 ALTER TABLE notification_events ALTER COLUMN preference_revision SET NOT NULL;
 ALTER TABLE notification_events ADD CONSTRAINT notification_event_preference_revision_fk
   FOREIGN KEY(household_id,user_id,preference_revision)
@@ -652,8 +680,10 @@ CREATE TABLE schedule_maintenance_jobs (
   last_error_code text,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE households NO FORCE ROW LEVEL SECURITY;
 INSERT INTO schedule_maintenance_jobs(household_id)
 SELECT id FROM households WHERE deleted_at IS NULL ON CONFLICT DO NOTHING;
+ALTER TABLE households FORCE ROW LEVEL SECURITY;
 ALTER TABLE schedule_maintenance_jobs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE schedule_maintenance_jobs FORCE ROW LEVEL SECURITY;
 

@@ -2,6 +2,15 @@
 -- and protection from spendable cash. Existing account inclusion choices are
 -- preserved; no savings account is silently reclassified as protected.
 
+-- Production migrations run as the table owner without BYPASSRLS. Temporarily
+-- relax FORCE only inside this migration transaction so historical tenant rows
+-- are visible to the deterministic backfill. Any failure rolls this state back.
+ALTER TABLE accounts NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE plans NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE plan_occurrences NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE plan_occurrence_revisions NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE plan_revisions NO FORCE ROW LEVEL SECURITY;
+
 ALTER TABLE accounts ADD COLUMN planning_role text;
 UPDATE accounts SET planning_role=CASE WHEN include_in_plan THEN 'spendable' ELSE 'excluded' END;
 ALTER TABLE accounts ALTER COLUMN planning_role SET DEFAULT 'spendable';
@@ -176,6 +185,12 @@ SELECT household_id,id,version,planned_savings_minor,safety_buffer_minor,
   next_income_date,income_confirmed,income_source_name,fallback_horizon_days,
   calculation_policy_version,NULL
 FROM changed;
+
+ALTER TABLE accounts FORCE ROW LEVEL SECURITY;
+ALTER TABLE plans FORCE ROW LEVEL SECURITY;
+ALTER TABLE plan_occurrences FORCE ROW LEVEL SECURITY;
+ALTER TABLE plan_occurrence_revisions FORCE ROW LEVEL SECURITY;
+ALTER TABLE plan_revisions FORCE ROW LEVEL SECURITY;
 
 ALTER TABLE plan_occurrences VALIDATE CONSTRAINT plan_occurrences_owner_check;
 

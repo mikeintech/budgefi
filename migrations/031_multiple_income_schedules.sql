@@ -1,6 +1,11 @@
 -- Independent expected-income rules. Future income is evidence for the planning
 -- horizon only; it never increases available cash until a deposit is verified.
 
+-- See migration 029: the production owner does not bypass forced tenant RLS.
+-- Keep this relaxation transaction-scoped and restore it before validation.
+ALTER TABLE plans NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE plan_occurrences NO FORCE ROW LEVEL SECURITY;
+
 CREATE TABLE income_schedules (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   household_id uuid NOT NULL REFERENCES households(id) ON DELETE CASCADE,
@@ -105,6 +110,9 @@ WHERE occurrence.household_id=schedule.household_id AND occurrence.kind='income'
 
 UPDATE plan_occurrences SET state='skipped',version=version+1,updated_at=now()
 WHERE kind='income' AND income_schedule_id IS NULL AND state<>'skipped';
+
+ALTER TABLE plans FORCE ROW LEVEL SECURITY;
+ALTER TABLE plan_occurrences FORCE ROW LEVEL SECURITY;
 
 ALTER TABLE plan_occurrences VALIDATE CONSTRAINT plan_occurrences_kind_owner_check;
 

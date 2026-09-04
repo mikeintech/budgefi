@@ -2,6 +2,9 @@
 -- payday-to-payday history. They are deliberately separate so an expected or
 -- fallback date can never masquerade as received income.
 
+-- The production migration owner remains subject to forced tenant RLS.
+ALTER TABLE accounts NO FORCE ROW LEVEL SECURITY;
+
 CREATE TABLE account_planning_role_revisions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   household_id uuid NOT NULL,
@@ -19,6 +22,8 @@ CREATE TABLE account_planning_role_revisions (
 
 INSERT INTO account_planning_role_revisions(household_id,account_id,version,planning_role,account_name,account_type,provenance,effective_at)
 SELECT household_id,id,1,CASE WHEN archived_at IS NULL THEN planning_role ELSE 'excluded' END,name,account_type,provenance,created_at FROM accounts;
+
+ALTER TABLE accounts FORCE ROW LEVEL SECURITY;
 
 CREATE FUNCTION record_account_planning_role_revision() RETURNS trigger
 LANGUAGE plpgsql SET search_path=public,pg_temp AS $$
